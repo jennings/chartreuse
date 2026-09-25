@@ -231,10 +231,10 @@ Depends on: 1C, 1D. Owns: `chartreuse-platform/src/macos/capture.rs`
 
 Depends on: Stage 0. Owns: `chartreuse-platform/src/macos/{clipboard,dialogs}.rs`
 
-- [ ] Write an image to `NSPasteboard` (PNG and TIFF representations)
-- [ ] Read an image from `NSPasteboard`, and tell the caller when there isn't one
-- [ ] `NSOpenPanel` limited to supported image formats
-- [ ] `NSSavePanel` with the default location and filename
+- [x] Write an image to `NSPasteboard` (PNG and TIFF representations)
+- [x] Read an image from `NSPasteboard`, and tell the caller when there isn't one
+- [x] `NSOpenPanel` limited to supported image formats
+- [x] `NSSavePanel` with the default location and filename
 
 ### 2C — Overlay windows (macOS)
 
