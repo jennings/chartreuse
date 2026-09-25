@@ -3,7 +3,11 @@
 //! Every CI step and every developer workflow beyond `cargo build` is a command
 //! here, so anything CI does can be reproduced locally.
 
+mod bundle;
 mod check;
+mod icon;
+mod info_plist;
+mod sign;
 mod util;
 
 use std::process::ExitCode;
@@ -13,6 +17,8 @@ Usage: cargo xtask <command>
 
 Commands:
   check     cargo fmt --check, cargo clippy (warnings denied), cargo test
+  bundle    build and sign target/debug/Chartreuse Dev.app (macOS); signs with
+            $CHARTREUSE_SIGN_IDENTITY, or ad-hoc with a warning when unset
 ";
 
 fn main() -> ExitCode {
@@ -24,6 +30,7 @@ fn main() -> ExitCode {
         .as_slice()
     {
         ["check"] => check::check(),
+        ["bundle"] => bundle::Bundle::development().build().map(drop),
         [] | ["help" | "--help" | "-h"] => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

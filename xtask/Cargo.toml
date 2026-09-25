@@ -9,6 +9,11 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+chartreuse-core.workspace = true
+png = "0.18.1"
+
+[dev-dependencies]
+plist = "1.10.1"
 
 [lints]
 workspace = true

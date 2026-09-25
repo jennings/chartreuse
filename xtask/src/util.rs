@@ -1,8 +1,9 @@
 //! Shared helpers: errors, workspace paths, and running commands.
 
+use std::ffi::OsStr;
 use std::fmt;
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 /// An xtask failure, printed as `error: …` before exiting with status 1.
 #[derive(Debug)]
@@ -11,6 +12,18 @@ pub struct Error(pub String);
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self {
+        Self(message.to_owned())
     }
 }
 
@@ -34,9 +47,24 @@ pub fn workspace_root() -> &'static Path {
         .expect("xtask lives inside the workspace")
 }
 
+/// Cargo's target directory, honoring `CARGO_TARGET_DIR`.
+pub fn target_dir() -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => workspace_root().join(dir),
+        None => workspace_root().join("target"),
+    }
+}
+
 /// The `cargo` that invoked us, so the pinned toolchain is used throughout.
 pub fn cargo() -> Command {
     let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    command.current_dir(workspace_root());
+    command
+}
+
+/// A command for an external tool, run from the workspace root.
+pub fn tool(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
     command.current_dir(workspace_root());
     command
 }
@@ -71,4 +99,31 @@ pub fn run(command: &mut Command) -> Result {
     } else {
         Err(Error(format!("{} failed ({status})", describe(command))))
     }
+}
+
+/// Runs a command and captures its output, failing if it does not succeed.
+pub fn capture(command: &mut Command) -> Result<Output> {
+    let output = command
+        .output()
+        .context(|| format!("could not run {}", describe(command)))?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(Error(format!(
+            "{} failed ({}): {}",
+            describe(command),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+/// Prints a warning that is hard to miss.
+pub fn loud_warning(lines: &[&str]) {
+    let rule = "=".repeat(78);
+    eprintln!("warning: {rule}");
+    for line in lines {
+        eprintln!("warning: {line}");
+    }
+    eprintln!("warning: {rule}");
 }
