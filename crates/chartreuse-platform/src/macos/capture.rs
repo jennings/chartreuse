@@ -89,7 +89,7 @@ impl Capture for MacosCapture {
 }
 
 /// The error for a missing, revoked, or silently withheld Screen Recording grant.
-fn permission_denied() -> Error {
+pub(super) fn permission_denied() -> Error {
     Error::PermissionDenied(Permission::ScreenRecording)
 }
 
@@ -137,28 +137,7 @@ fn start_captures(
     displays: Vec<DisplayInfo>,
 ) -> Result<Vec<PendingCapture>> {
     let own = own_application(content);
-    let own_pid = own_pid();
-    // SAFETY: `windows` is a plain property getter on a valid object.
-    let shareable = unsafe { content.windows() }
-        .iter()
-        .filter(|window| {
-            // SAFETY: plain property getters on a valid `SCWindow`.
-            let owner = unsafe { window.owningApplication() };
-            // SAFETY: as above, on a valid `SCRunningApplication`.
-            owner.is_none_or(|owner| unsafe { owner.processID() } != own_pid)
-        })
-        .count();
-    let windows = ForeignWindows {
-        shareable,
-        on_screen: on_screen_foreign_windows(own_pid),
-    };
-    if windows.withheld() {
-        tracing::warn!(
-            ?windows,
-            "ScreenCaptureKit lists no windows of other apps; treating Screen Recording as withheld"
-        );
-        return Err(permission_denied());
-    }
+    check_not_withheld(content)?;
 
     // SAFETY: `displays` is a plain property getter on a valid object.
     let sc_displays = unsafe { content.displays() };
@@ -248,6 +227,24 @@ impl ForeignWindows {
     }
 }
 
+/// Fails with [`Error::PermissionDenied`] when `content` hides every other app's
+/// window that the window server shows ([`ForeignWindows::withheld`]).
+pub(super) fn check_not_withheld(content: &SCShareableContent) -> Result<()> {
+    let own_pid = own_pid();
+    let windows = ForeignWindows {
+        shareable: shareable_foreign_windows(content, own_pid),
+        on_screen: on_screen_foreign_windows(own_pid),
+    };
+    if windows.withheld() {
+        tracing::warn!(
+            ?windows,
+            "ScreenCaptureKit lists no windows of other apps; treating Screen Recording as withheld"
+        );
+        return Err(permission_denied());
+    }
+    Ok(())
+}
+
 /// Whether every image is entirely fully transparent, what a withheld capture
 /// looks like. Opaque images of any color, including all black, are real
 /// content. An empty list is not blank: there is nothing to judge.
@@ -291,12 +288,26 @@ fn on_screen_foreign_windows(own_pid: i32) -> usize {
         .count()
 }
 
+/// Counts the windows in `content` owned by processes other than `own_pid`.
+fn shareable_foreign_windows(content: &SCShareableContent, own_pid: i32) -> usize {
+    // SAFETY: `windows` is a plain property getter on a valid object.
+    unsafe { content.windows() }
+        .iter()
+        .filter(|window| {
+            // SAFETY: plain property getters on a valid `SCWindow`.
+            let owner = unsafe { window.owningApplication() };
+            // SAFETY: as above, on a valid `SCRunningApplication`.
+            owner.is_none_or(|owner| unsafe { owner.processID() } != own_pid)
+        })
+        .count()
+}
+
 // ---------------------------------------------------------------------------
 // Shared ScreenCaptureKit helpers (display and window capture)
 // ---------------------------------------------------------------------------
 
 /// This process's id, in the type `SCRunningApplication::processID` uses.
-fn own_pid() -> i32 {
+pub(super) fn own_pid() -> i32 {
     // Process ids fit in `pid_t`; the kernel never hands out larger ones.
     process::id().cast_signed()
 }
@@ -316,7 +327,7 @@ fn own_application(content: &SCShareableContent) -> Option<Retained<SCRunningApp
 ///
 /// ScreenCaptureKit objects are not `Send`, so whatever needs them happens inside
 /// `f`; `f` hands back `Send` data, such as pending [`capture_image`] futures.
-fn with_shareable_content<T, F>(f: F) -> BoxFuture<'static, Result<T>>
+pub(super) fn with_shareable_content<T, F>(f: F) -> BoxFuture<'static, Result<T>>
 where
     T: Send + 'static,
     F: FnOnce(&SCShareableContent) -> Result<T> + Send + 'static,
