@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 use chartreuse_core::flavor::Flavor;
 
-use crate::icon;
 use crate::info_plist::InfoPlist;
 use crate::sign::{self, Identity, SignOptions};
 use crate::util::{cargo, run, target_dir, Context, Error, Result};
+use crate::{dev_cert, icon};
 
 /// The executable's name, in `target/<profile>/` and in `Contents/MacOS/`.
 const EXECUTABLE: &str = "chartreuse";
@@ -70,17 +70,19 @@ pub struct Bundle {
 
 impl Bundle {
     /// The development bundle: debug profile, development flavor, signed with
-    /// [`sign::DEV_IDENTITY_ENV`] or ad-hoc.
-    pub fn development() -> Self {
-        Self {
+    /// [`sign::DEV_IDENTITY_ENV`], else the `cargo xtask dev-cert` identity, else
+    /// ad-hoc.
+    pub fn development() -> Result<Self> {
+        Ok(Self {
             flavor: Flavor::Development,
             profile: Profile::Debug,
-            identity: Identity::from_env_value(
+            identity: Identity::development(
                 std::env::var(sign::DEV_IDENTITY_ENV).ok().as_deref(),
-            ),
+                dev_cert::installed,
+            )?,
             sign_options: SignOptions { timestamp: false },
             identity_env: sign::DEV_IDENTITY_ENV,
-        }
+        })
     }
 
     /// Builds the executable, assembles the bundle, and signs it.

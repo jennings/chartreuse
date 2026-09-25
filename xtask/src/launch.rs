@@ -48,7 +48,7 @@ fn terminal() -> Option<PathBuf> {
 }
 
 pub fn launch() -> Result {
-    let bundle = Bundle::development();
+    let bundle = Bundle::development()?;
     // Check before rebuilding: replacing a running app's bundle confuses macOS.
     let expected = Layout::new(&target_dir().join(bundle.profile.dir_name()), bundle.flavor);
     let running = tool("pgrep")

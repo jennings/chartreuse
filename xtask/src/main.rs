@@ -5,6 +5,7 @@
 
 mod bundle;
 mod check;
+mod dev_cert;
 mod icon;
 mod info_plist;
 mod launch;
@@ -20,8 +21,12 @@ Usage: cargo xtask <command>
 Commands:
   check     cargo fmt --check, cargo clippy (warnings denied), cargo test
   bundle    build and sign target/debug/Chartreuse Dev.app (macOS); signs with
-            $CHARTREUSE_SIGN_IDENTITY, or ad-hoc with a warning when unset
+            $CHARTREUSE_SIGN_IDENTITY, else the dev-cert identity, else ad-hoc
+            with a warning
   run       bundle, then launch the app with `open`, its output on this terminal
+  dev-cert  create a self-signed development signing identity in its own
+            keychain (macOS, once per machine), so the Screen Recording
+            permission survives rebuilds
   release   release build for this OS; on macOS a release-flavor Chartreuse.app
             signed with $CHARTREUSE_RELEASE_SIGN_IDENTITY, zipped into target/dist
             --allow-ad-hoc  sign ad-hoc when the identity is unset (local only)
@@ -36,8 +41,9 @@ fn main() -> ExitCode {
         .as_slice()
     {
         ["check"] => check::check(),
-        ["bundle"] => bundle::Bundle::development().build().map(drop),
+        ["bundle"] => bundle::Bundle::development().and_then(|b| b.build().map(drop)),
         ["run"] => launch::launch(),
+        ["dev-cert"] => dev_cert::dev_cert(),
         ["release"] => release::release(false),
         ["release", "--allow-ad-hoc"] => release::release(true),
         [] | ["help" | "--help" | "-h"] => {

@@ -6,7 +6,7 @@
 //! binary's `cdhash`, so every rebuild looks like a new app.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::util::{capture, loud_warning, run, tool, Result};
 
@@ -19,6 +19,9 @@ pub enum Identity {
     /// A certificate in the keychain, by name or SHA-1 hash (as listed by
     /// `security find-identity -v -p codesigning`).
     Named(String),
+    /// The identity `cargo xtask dev-cert` created, by SHA-1 hash, in its own
+    /// keychain (which is not on the search list).
+    DevCert { keychain: PathBuf, hash: String },
     /// An ad-hoc signature: runs locally, but privacy grants do not persist.
     AdHoc,
 }
@@ -31,6 +34,19 @@ impl Identity {
         match value.map(str::trim) {
             Some(name) if !name.is_empty() => Self::Named(name.to_owned()),
             _ => Self::AdHoc,
+        }
+    }
+
+    /// The development identity: the one named by [`DEV_IDENTITY_ENV`]'s value if
+    /// set, else the `cargo xtask dev-cert` identity if `dev_cert` finds one, else
+    /// ad-hoc.
+    pub fn development(
+        env_value: Option<&str>,
+        dev_cert: impl FnOnce() -> Result<Option<Self>>,
+    ) -> Result<Self> {
+        match Self::from_env_value(env_value) {
+            Self::AdHoc => Ok(dev_cert()?.unwrap_or(Self::AdHoc)),
+            named => Ok(named),
         }
     }
 }
@@ -46,25 +62,24 @@ pub struct SignOptions {
 /// parity between development and release.
 #[must_use]
 pub fn codesign_args(bundle: &Path, identity: &Identity, options: SignOptions) -> Vec<OsString> {
-    let identity = match identity {
-        Identity::Named(name) => name.as_str(),
-        Identity::AdHoc => "-",
-    };
     let timestamp = if options.timestamp {
         "--timestamp"
     } else {
         "--timestamp=none"
     };
-    let mut args: Vec<OsString> = [
-        "--force",
-        "--options",
-        "runtime",
-        timestamp,
-        "--sign",
-        identity,
-    ]
-    .map(OsString::from)
-    .into();
+    let mut args: Vec<OsString> = ["--force", "--options", "runtime", timestamp]
+        .map(OsString::from)
+        .into();
+    match identity {
+        Identity::Named(name) => args.extend(["--sign".into(), name.into()]),
+        Identity::DevCert { keychain, hash } => args.extend([
+            "--keychain".into(),
+            keychain.into(),
+            "--sign".into(),
+            hash.into(),
+        ]),
+        Identity::AdHoc => args.extend(["--sign".into(), "-".into()]),
+    }
     args.push(bundle.into());
     args
 }
@@ -90,14 +105,26 @@ pub fn requirement_is_ad_hoc(requirement: &str) -> bool {
 /// Signs `bundle`, then prints its designated requirement and warns if it will
 /// not keep privacy grants across rebuilds.
 pub fn sign(bundle: &Path, identity: &Identity, options: SignOptions, env_var: &str) -> Result {
-    if *identity == Identity::AdHoc {
-        loud_warning(&[
+    match identity {
+        Identity::AdHoc if env_var == DEV_IDENTITY_ENV => loud_warning(&[
+            &format!("{env_var} is not set and `cargo xtask dev-cert` has not been run:"),
+            "signing ad-hoc. Ad-hoc signatures change with every build, and macOS ties",
+            "Screen Recording to the signature, so ad-hoc builds never keep the",
+            "permission and the app does not ask for it. Run `cargo xtask dev-cert`",
+            &format!("once, or set {env_var} to an identity from"),
+            "`security find-identity -v -p codesigning` (see README.md).",
+        ]),
+        Identity::AdHoc => loud_warning(&[
             &format!("{env_var} is not set: signing ad-hoc."),
             "Ad-hoc signatures change with every build, so macOS forgets the Screen",
             "Recording permission after each rebuild and captures come back blank.",
             &format!("Set {env_var} to a code-signing identity from"),
             "`security find-identity -v -p codesigning` (see README.md).",
-        ]);
+        ]),
+        Identity::DevCert { .. } => {
+            eprintln!("signing with the `cargo xtask dev-cert` identity");
+        }
+        Identity::Named(_) => {}
     }
     run(tool("codesign").args(codesign_args(bundle, identity, options)))?;
 
@@ -137,6 +164,33 @@ mod tests {
     }
 
     #[test]
+    fn development_prefers_the_env_identity_then_the_dev_cert() {
+        let dev_cert = || Identity::DevCert {
+            keychain: "/k/dev.keychain-db".into(),
+            hash: "AB76".into(),
+        };
+        // An explicit identity wins; the dev keychain is not even unlocked.
+        let named = Identity::development(Some("Apple Development: Jo"), || {
+            panic!("the dev cert must not be looked up")
+        });
+        assert_eq!(
+            named.unwrap(),
+            Identity::Named("Apple Development: Jo".into())
+        );
+        assert_eq!(
+            Identity::development(Some(" "), || Ok(Some(dev_cert()))).unwrap(),
+            dev_cert()
+        );
+        assert_eq!(
+            Identity::development(None, || Ok(None)).unwrap(),
+            Identity::AdHoc
+        );
+        // A dev keychain that exists but cannot be used fails the build rather
+        // than silently signing ad-hoc.
+        assert!(Identity::development(None, || Err("broken".into())).is_err());
+    }
+
+    #[test]
     fn signing_always_uses_the_hardened_runtime() {
         let bundle = Path::new("/tmp/Chartreuse Dev.app");
         let args = codesign_args(bundle, &Identity::AdHoc, SignOptions { timestamp: false });
@@ -161,6 +215,32 @@ mod tests {
         assert_eq!(
             &args[3..6],
             ["--timestamp", "--sign", "Dev ID"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn dev_cert_signing_searches_only_its_keychain() {
+        // The dev keychain is not on the search list, so codesign must be
+        // pointed at it.
+        let identity = Identity::DevCert {
+            keychain: "/Users/jo/Library/Keychains/dev.keychain-db".into(),
+            hash: "AB76B80BF7B3F1D0FC53E1242D3F79D566418749".into(),
+        };
+        let args = codesign_args(
+            Path::new("/tmp/Chartreuse Dev.app"),
+            &identity,
+            SignOptions { timestamp: false },
+        );
+        assert_eq!(
+            &args[4..],
+            [
+                "--keychain",
+                "/Users/jo/Library/Keychains/dev.keychain-db",
+                "--sign",
+                "AB76B80BF7B3F1D0FC53E1242D3F79D566418749",
+                "/tmp/Chartreuse Dev.app"
+            ]
+            .map(OsString::from)
         );
     }
 

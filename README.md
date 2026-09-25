@@ -16,32 +16,58 @@ See [macOS code signing](PLAN.md#macos-code-signing) for the background.
   `rust-toolchain.toml` and installed automatically.
 - Xcode Command Line Tools (`xcode-select --install`) for `codesign` and `iconutil`.
 
-### 2. A code-signing certificate
+### 2. A signing identity
 
-Create one of these once, in your login keychain:
+macOS remembers the Screen Recording permission for a build's signing identity.
+Builds signed ad-hoc (the fallback) have none: to macOS every rebuild is a new app, so
+the permission never sticks, and the app does not ask for it (macOS would ask again on
+every launch). Set up an identity once, either way below.
+
+**`cargo xtask dev-cert` (recommended).** It creates a self-signed code-signing
+certificate in a keychain of its own, `~/Library/Keychains/chartreuse-dev-signing.keychain-db`,
+without any prompt and without touching your login keychain. `cargo xtask bundle` and
+`cargo xtask run` sign with it whenever `CHARTREUSE_SIGN_IDENTITY` is unset, so the
+builds of every checkout and jj workspace are one app to macOS. Once per machine:
+
+```sh
+cargo xtask dev-cert
+# macOS keeps one Screen Recording record per bundle id, pinned to the build that
+# first asked. If any earlier build asked (ad-hoc, or signed with another
+# certificate), no build signed with this identity matches it, so macOS would ask
+# on every launch. Drop it:
+tccutil reset ScreenCapture io.jennings.chartreuse.dev
+# macOS asks once: allow Chartreuse Dev in System Settings, then relaunch.
+cargo xtask run
+```
+
+The keychain's password is fixed and not a secret, so any program running as you can
+sign code with this identity and so inherit Chartreuse Dev's Screen Recording
+permission (as with a login-keychain identity that `codesign` may *Always Allow*).
+Remove it with `security delete-keychain
+~/Library/Keychains/chartreuse-dev-signing.keychain-db`. A recreated identity is a new
+certificate, so the old record matches no new build: run `cargo xtask dev-cert`, then
+`tccutil reset ScreenCapture io.jennings.chartreuse.dev`, then allow the permission again.
+
+**Your own certificate**, in your login keychain:
 
 - **Apple Development** (free with an Apple ID): Xcode → Settings → Accounts → add
   your Apple ID → Manage Certificates → **+** → Apple Development.
 - **Self-signed**: Keychain Access → Certificate Assistant → Create a Certificate…,
   with Identity Type *Self-Signed Root* and Certificate Type *Code Signing*.
 
-List the identities `codesign` can use:
+List the identities `codesign` can use, and point the build at yours:
 
 ```sh
 security find-identity -v -p codesigning
-```
-
-### 3. Point the build at it
-
-```sh
 export CHARTREUSE_SIGN_IDENTITY="Apple Development: Your Name (TEAMID1234)"
 ```
 
 The value is the quoted name (or the 40-character hash) from `security
-find-identity`. Put it in your shell profile. Without it, builds are signed ad-hoc
-and a loud warning explains that Screen Recording grants will not survive a rebuild.
+find-identity`. Put it in your shell profile. It takes precedence over the
+`dev-cert` identity. Without either, builds are signed ad-hoc and a loud warning
+says so.
 
-### 4. Build and run
+### 3. Build and run
 
 ```sh
 cargo xtask run
@@ -60,10 +86,14 @@ placeholder window; closing it (or its Quit button) quits the app. Set `RUST_LOG
 - `codesign -d -r- "target/debug/Chartreuse Dev.app"` prints the designated
   requirement. It should name the bundle identifier and your certificate; a `cdhash`
   means the build was signed ad-hoc.
-- `tccutil reset ScreenCapture io.jennings.chartreuse.dev` resets the Screen
-  Recording grant, to test the first-run flow.
-- With a self-signed certificate the keychain may ask for access to the private key
-  on every build; choose *Always Allow* for `codesign`.
+- A signed build that asks for Screen Recording on every launch: macOS's record for
+  `io.jennings.chartreuse.dev` was made by another identity (usually an ad-hoc
+  build). `tccutil reset ScreenCapture io.jennings.chartreuse.dev` clears it.
+- The same command resets the grant to test the first-run flow. That flow needs a
+  signed build, since ad-hoc builds never ask.
+- With a self-signed certificate from Keychain Access, the keychain may ask for
+  access to the private key on every build; choose *Always Allow* for `codesign`.
+  (`dev-cert` sets up its key so that it never asks.)
 
 ## Commands
 
@@ -74,6 +104,7 @@ Everything beyond `cargo build` is a `cargo xtask` command, and CI runs nothing 
 | `cargo xtask check` | `cargo fmt --check`, `cargo clippy` with warnings denied, `cargo test` |
 | `cargo xtask bundle` | Signed `target/debug/Chartreuse Dev.app` (macOS) |
 | `cargo xtask run` | `bundle`, then launch it through LaunchServices |
+| `cargo xtask dev-cert` | Once per machine (macOS): create the self-signed development signing identity that `bundle` uses when `CHARTREUSE_SIGN_IDENTITY` is unset |
 | `cargo xtask release` | Release build for the host platform. macOS: `Chartreuse.app` signed with `CHARTREUSE_RELEASE_SIGN_IDENTITY` (a Developer ID Application identity), zipped into `target/dist/`. `--allow-ad-hoc` signs ad-hoc instead, for a local build that cannot be distributed. |
 
 The build flavor (development or release: bundle identifier, name, accent color) is
