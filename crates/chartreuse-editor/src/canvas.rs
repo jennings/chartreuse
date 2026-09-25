@@ -27,6 +27,7 @@
 mod render;
 mod viewport;
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use iced::advanced::mouse::{self, click, Interaction};
@@ -38,8 +39,8 @@ use smol_str::SmolStr;
 
 use crate::editor::Message;
 use crate::font;
-use crate::model::{Annotation, AnnotationId, Shape};
-use crate::tools::{Preview, TextTarget};
+use crate::model::{Annotation, Shape};
+use crate::tools::{self, Preview, TextTarget};
 use crate::Editor;
 
 pub use render::color;
@@ -232,26 +233,15 @@ impl Scene<'_> {
         );
     }
 
-    /// The annotation the active tool's preview hides: the text being edited.
-    fn hidden(preview: &Preview<'_>) -> Option<AnnotationId> {
-        match preview {
-            Preview::Text(edit) => match edit.target() {
-                TextTarget::Existing(id) => Some(id),
-                TextTarget::New => None,
-            },
-            Preview::None | Preview::New(_) => None,
-        }
-    }
-
     fn draw_annotations(&self, frame: &mut Frame, range: Range<usize>) {
         let viewport = self.editor.viewport(frame.size());
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
-        let hidden = Self::hidden(&self.editor.active_tool().preview());
+        let preview = self.editor.active_tool().preview();
         let annotations = &self.editor.document().annotations()[range];
         frame.with_clip(clip, |frame| {
             for annotation in annotations {
-                if Some(annotation.id()) != hidden {
-                    render::shape(frame, &viewport, &annotation.shape, &annotation.style);
+                if let Some(shape) = displayed(annotation, &preview) {
+                    render::shape(frame, &viewport, &shape, &annotation.style);
                 }
             }
         });
@@ -261,8 +251,10 @@ impl Scene<'_> {
         let viewport = self.editor.viewport(frame.size());
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
         let accent = theme.palette().primary;
-        match self.editor.active_tool().preview() {
-            Preview::None => {}
+        let preview = self.editor.active_tool().preview();
+        self.draw_selection(frame, &viewport, &preview, accent);
+        match preview {
+            Preview::None | Preview::Moved(..) | Preview::Reshaped(..) => {}
             Preview::New(shape) => frame.with_clip(clip, |frame| {
                 render::shape(frame, &viewport, &shape, &self.editor.style());
             }),
@@ -285,6 +277,47 @@ impl Scene<'_> {
                 );
             }
         }
+    }
+
+    /// An outline around each selected annotation as displayed, plus the
+    /// handles of a lone selection.
+    fn draw_selection(
+        &self,
+        frame: &mut Frame,
+        viewport: &Viewport,
+        preview: &Preview<'_>,
+        accent: Color,
+    ) {
+        let selected: Vec<_> = self
+            .editor
+            .document()
+            .selected()
+            .filter_map(|annotation| Some((annotation, displayed(annotation, preview)?)))
+            .collect();
+        for (annotation, shape) in &selected {
+            render::selection_outline(frame, viewport, shape.bounds(&annotation.style), accent);
+        }
+        if let [(_, shape)] = selected.as_slice() {
+            for (_, point) in tools::handles(shape) {
+                render::handle(frame, viewport.to_canvas(point), accent);
+            }
+        }
+    }
+}
+
+/// How `annotation` is displayed while `preview` is in progress: moved,
+/// reshaped, or hidden (`None`, the text being edited).
+fn displayed<'a>(annotation: &'a Annotation, preview: &Preview<'a>) -> Option<Cow<'a, Shape>> {
+    let id = annotation.id();
+    match *preview {
+        Preview::Text(edit) if edit.target() == TextTarget::Existing(id) => None,
+        Preview::Moved(ids, delta) if ids.contains(&id) => {
+            let mut shape = annotation.shape.clone();
+            shape.translate(delta);
+            Some(Cow::Owned(shape))
+        }
+        Preview::Reshaped(target, shape) if target == id => Some(Cow::Borrowed(shape)),
+        _ => Some(Cow::Borrowed(&annotation.shape)),
     }
 }
 
@@ -357,9 +390,14 @@ mod tests {
     use chartreuse_core::color::Rgba8;
     use chartreuse_core::geometry::PhysicalSize;
     use chartreuse_core::image::Image;
+    use iced::advanced::{clipboard, renderer};
+    use iced::futures::executor::block_on;
+    use iced_runtime::user_interface::{self, UserInterface};
 
     use super::*;
-    use crate::model::{Document, Line, Point as DocPoint, Style, Text};
+    use crate::editor::testing;
+    use crate::model::{Arrow, Document, Line, Point as DocPoint, Style, Text};
+    use crate::tools::ToolKind;
 
     fn document(kinds: &str) -> Document {
         let mut document = Document::new(Image::filled(
@@ -385,5 +423,137 @@ mod tests {
         assert_eq!(runs(document("sstt").annotations()), vec![0..4]);
         assert_eq!(runs(document("tsts").annotations()), vec![0..1, 1..3, 3..4]);
         assert_eq!(runs(document("sttsst").annotations()), vec![0..3, 3..6]);
+    }
+
+    #[test]
+    fn previews_move_reshape_or_hide_only_their_targets() {
+        let document = document("sst");
+        let [a, b, t] = document.annotations() else {
+            unreachable!()
+        };
+        let shown =
+            |annotation, preview: &Preview<'_>| displayed(annotation, preview).map(Cow::into_owned);
+        let delta = crate::model::Vector::new(5.0, 0.0);
+        let mut moved = a.shape.clone();
+        moved.translate(delta);
+        let moving = Preview::Moved(&[a.id()][..], delta);
+        assert_eq!(shown(a, &moving), Some(moved));
+        assert_eq!(shown(b, &moving), Some(b.shape.clone()));
+
+        let reshaped = Shape::Line(Line {
+            start: DocPoint::ORIGIN,
+            end: DocPoint::new(9.0, 9.0),
+        });
+        let reshaping = Preview::Reshaped(b.id(), &reshaped);
+        assert_eq!(shown(b, &reshaping), Some(reshaped.clone()));
+        assert_eq!(shown(a, &reshaping), Some(a.shape.clone()));
+
+        let edit = tools::TextEdit::existing(&document, t.id()).unwrap();
+        assert_eq!(shown(t, &Preview::Text(&edit)), None);
+        assert_eq!(shown(a, &Preview::Text(&edit)), Some(a.shape.clone()));
+    }
+
+    /// Drives the canvas's widget tree headlessly, as the iced runtime does:
+    /// each batch of events goes to a tree built from the editor's current
+    /// view, and the messages it publishes go back to the editor. Widget state
+    /// carries over from one view to the next.
+    struct Headless {
+        renderer: Renderer,
+        cache: Option<user_interface::Cache>,
+    }
+
+    impl Headless {
+        fn new() -> Self {
+            let renderer = block_on(<Renderer as renderer::Headless>::new(
+                iced::Font::DEFAULT,
+                iced::Pixels(16.0),
+                Some("tiny-skia"),
+            ))
+            .expect("a tiny-skia renderer");
+            Self {
+                renderer,
+                cache: None,
+            }
+        }
+
+        fn events(&mut self, editor: &mut Editor, cursor: Point, events: &[Event]) {
+            let mut ui = UserInterface::build(
+                view(editor),
+                testing::CANVAS,
+                self.cache.take().unwrap_or_default(),
+                &mut self.renderer,
+            );
+            let mut messages = Vec::new();
+            let _ = ui.update(
+                events,
+                mouse::Cursor::Available(cursor),
+                &mut self.renderer,
+                &mut clipboard::Null,
+                &mut messages,
+            );
+            self.cache = Some(ui.into_cache());
+            for message in messages {
+                editor.update(message);
+            }
+        }
+    }
+
+    #[test]
+    fn a_drag_whose_press_changes_the_number_of_layers_still_moves() {
+        use testing::{at, click, drag, input, named, press, type_text};
+
+        let mut editor = testing::editor();
+        editor.update(Message::Tool(ToolKind::Rectangle));
+        drag(&mut editor, at(10.0, 10.0), at(100.0, 100.0));
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(200.0, 50.0));
+        type_text(&mut editor, "hi");
+        editor.update(Message::Tool(ToolKind::Arrow));
+        drag(&mut editor, at(10.0, 200.0), at(100.0, 200.0));
+        // Open the text and empty it, so committing the edit deletes it.
+        editor.update(Message::Tool(ToolKind::Select));
+        press(&mut editor, at(205.0, 50.0), 2);
+        input(
+            &mut editor,
+            InputKind::Release {
+                position: at(205.0, 50.0),
+            },
+        );
+        named(&mut editor, keyboard::key::Named::Backspace);
+        named(&mut editor, keyboard::key::Named::Backspace);
+        assert_eq!(runs(editor.document().annotations()).len(), 2);
+
+        // Pressing on the arrow commits the edit, which merges the two runs
+        // into one layer, and starts dragging the arrow.
+        let mut ui = Headless::new();
+        let (from, to) = (at(50.0, 200.0), at(90.0, 230.0));
+        let button = mouse::Button::Left;
+        ui.events(
+            &mut editor,
+            from,
+            &[Event::Mouse(mouse::Event::ButtonPressed(button))],
+        );
+        assert_eq!(runs(editor.document().annotations()).len(), 1);
+        ui.events(
+            &mut editor,
+            to,
+            &[Event::Mouse(mouse::Event::CursorMoved { position: to })],
+        );
+        ui.events(
+            &mut editor,
+            to,
+            &[Event::Mouse(mouse::Event::ButtonReleased(button))],
+        );
+
+        let [_, arrow] = editor.document().annotations() else {
+            panic!("expected the rectangle and the arrow");
+        };
+        assert_eq!(
+            arrow.shape,
+            Shape::Arrow(Arrow {
+                start: DocPoint::new(50.0, 230.0),
+                end: DocPoint::new(140.0, 230.0),
+            })
+        );
     }
 }

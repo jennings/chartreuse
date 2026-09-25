@@ -7,7 +7,7 @@ use iced::{keyboard, Element};
 
 use crate::canvas::{self, Input, InputKind, View, Viewport, Zoom};
 use crate::font;
-use crate::model::{Document, Shape, Size, Style};
+use crate::model::{Command, Document, Shape, Size, Style};
 use crate::tools::{Context, Pointer, TextInput, Tool, ToolKind};
 
 /// Canvas pixels of Cmd-scrolling that double (or halve) the zoom.
@@ -59,7 +59,7 @@ impl Editor {
         Self {
             document: Document::new(image),
             image: handle,
-            tool: ToolKind::Line.create(),
+            tool: ToolKind::Select.create(),
             style: Style::default(),
             view: View::default(),
             canvas,
@@ -174,14 +174,29 @@ impl Editor {
         }
     }
 
-    /// Handles a key press: typing while a text edit is open.
+    /// Handles a key press: typing while a text edit is open; otherwise
+    /// Delete or Backspace deletes the selection.
     fn key(&mut self, key: &keyboard::Key, modifiers: keyboard::Modifiers, text: Option<&str>) {
         use keyboard::key::Named;
         use keyboard::Key;
 
-        if self.tool.text_edit().is_none() {
-            return;
+        if self.tool.text_edit().is_some() {
+            self.type_key(key, modifiers, text);
+        } else if let Key::Named(Named::Delete | Named::Backspace) = key.as_ref() {
+            self.delete_selection();
         }
+    }
+
+    /// Typing into the open text edit.
+    fn type_key(
+        &mut self,
+        key: &keyboard::Key,
+        modifiers: keyboard::Modifiers,
+        text: Option<&str>,
+    ) {
+        use keyboard::key::Named;
+        use keyboard::Key;
+
         let input = match key.as_ref() {
             Key::Named(Named::Escape) => {
                 self.with_tool(|tool, cx| tool.escape(cx));
@@ -198,6 +213,13 @@ impl Editor {
         if let Some(edit) = self.tool.text_edit() {
             edit.input(input);
         }
+    }
+
+    /// Deletes the selected annotations as one undo step.
+    fn delete_selection(&mut self) {
+        self.with_tool(|tool, cx| tool.finish(cx));
+        let ids = self.document.selection().iter().copied().collect();
+        self.document.apply(Command::Delete { ids });
     }
 
     /// Reports the laid-out size of every text annotation that has none (new,
@@ -267,6 +289,13 @@ pub(crate) mod testing {
             PhysicalSize::new(400, 300),
             Rgba8::from_rgb_hex(0xffffff),
         ))
+    }
+
+    /// An [`editor`] with the line tool.
+    pub fn line_editor() -> Editor {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Line));
+        editor
     }
 
     /// The canvas point over document point `(x, y)` in the fitted view.
@@ -369,7 +398,7 @@ mod tests {
 
     #[test]
     fn a_drag_on_the_canvas_adds_one_annotation_in_document_coordinates() {
-        let mut editor = editor();
+        let mut editor = line_editor();
         drag(&mut editor, at(10.0, 20.0), at(110.0, 70.0));
         let [line] = editor.document().annotations() else {
             panic!("expected one annotation");
@@ -386,7 +415,7 @@ mod tests {
 
     #[test]
     fn zoom_and_pan_change_where_drags_land_and_the_drag_threshold() {
-        let mut editor = editor();
+        let mut editor = line_editor();
         modifiers(&mut editor, keyboard::Modifiers::COMMAND);
         // Doubling the zoom around document point (0, 0) keeps it in place.
         scroll(
@@ -419,7 +448,7 @@ mod tests {
 
     #[test]
     fn shift_pressed_mid_drag_constrains_without_moving_the_pointer() {
-        let mut editor = editor();
+        let mut editor = line_editor();
         press(&mut editor, at(0.0, 0.0), 1);
         input(
             &mut editor,
@@ -450,10 +479,11 @@ mod tests {
     fn each_drag_tool_draws_its_shape() {
         let mut editor = editor();
         let (a, b) = (Point::new(10.0, 10.0), Point::new(60.0, 40.0));
+        let (c, d) = (Point::new(200.0, 150.0), Point::new(100.0, 100.0));
         editor.update(Message::Tool(ToolKind::Arrow));
         drag(&mut editor, at(a.x, a.y), at(b.x, b.y));
         editor.update(Message::Tool(ToolKind::Rectangle));
-        drag(&mut editor, at(b.x, b.y), at(a.x, a.y));
+        drag(&mut editor, at(c.x, c.y), at(d.x, d.y));
         let shapes: Vec<_> = editor
             .document()
             .annotations()
@@ -465,10 +495,102 @@ mod tests {
             [
                 Shape::Arrow(Arrow { start: a, end: b }),
                 Shape::Rectangle(Rectangle {
-                    rect: Rect::from_corners(a, b),
+                    rect: Rect::from_corners(c, d),
                 }),
             ]
         );
+    }
+
+    #[test]
+    fn a_drag_tool_drags_the_handles_of_the_shape_it_just_drew() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Arrow));
+        drag(&mut editor, at(10.0, 10.0), at(60.0, 40.0));
+        drag(&mut editor, at(61.0, 41.0), at(90.0, 40.0));
+        let [arrow] = editor.document().annotations() else {
+            panic!("expected one annotation");
+        };
+        assert_eq!(
+            arrow.shape,
+            Shape::Arrow(Arrow {
+                start: Point::new(10.0, 10.0),
+                end: Point::new(89.0, 39.0),
+            })
+        );
+        assert!(editor.document.undo(), "the reshape");
+        assert!(editor.document.undo(), "the add");
+        assert!(!editor.document().can_undo());
+    }
+
+    #[test]
+    fn select_move_and_delete_undo_end_to_end() {
+        let mut editor = line_editor();
+        drag(&mut editor, at(10.0, 50.0), at(110.0, 50.0));
+        let id = editor.document().annotations()[0].id();
+        editor.update(Message::Tool(ToolKind::Select));
+        click(&mut editor, at(200.0, 200.0));
+        assert!(editor.document().selection().is_empty());
+
+        // Drag the line (not a handle) down by 30 and delete it.
+        drag(&mut editor, at(60.0, 51.0), at(60.0, 81.0));
+        assert!(editor.document().is_selected(id));
+        named(&mut editor, Named::Delete);
+        assert!(editor.document().annotations().is_empty());
+
+        let line_y = |editor: &Editor| match &editor.document().get(id).unwrap().shape {
+            Shape::Line(line) => line.start.y,
+            other => panic!("not a line: {other:?}"),
+        };
+        assert!(editor.document.undo());
+        assert_eq!(line_y(&editor), 80.0, "restored where it was moved");
+        assert!(editor.document().is_selected(id));
+        assert!(editor.document.undo());
+        assert_eq!(line_y(&editor), 50.0, "the move was one step");
+        assert!(editor.document.undo());
+        assert!(editor.document().annotations().is_empty());
+        assert!(!editor.document().can_undo());
+
+        // Backspace deletes too; with nothing selected it records nothing.
+        assert!(editor.document.redo());
+        editor.document.set_selection([id]);
+        named(&mut editor, Named::Backspace);
+        assert!(editor.document().annotations().is_empty());
+        named(&mut editor, Named::Backspace);
+        assert!(editor.document.undo());
+        assert_eq!(editor.document().annotations().len(), 1);
+    }
+
+    #[test]
+    fn double_clicking_text_with_select_edits_it_in_place() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(20.0, 100.0));
+        type_text(&mut editor, "Hi");
+        editor.update(Message::Tool(ToolKind::Select));
+        let text = only_text(&editor);
+        let inside = text.position + crate::model::Vector::new(5.0, 5.0);
+        press(&mut editor, at(inside.x, inside.y), 1);
+        input(
+            &mut editor,
+            InputKind::Release {
+                position: at(inside.x, inside.y),
+            },
+        );
+        press(&mut editor, at(inside.x, inside.y), 2);
+        input(
+            &mut editor,
+            InputKind::Release {
+                position: at(inside.x, inside.y),
+            },
+        );
+        named(&mut editor, Named::Backspace);
+        type_text(&mut editor, "ello");
+        named(&mut editor, Named::Escape);
+
+        assert_eq!(only_text(&editor).content, "Hello");
+        assert!(only_text(&editor).measured().is_some(), "re-measured");
+        assert!(editor.document.undo());
+        assert_eq!(only_text(&editor).content, "Hi");
     }
 
     #[test]

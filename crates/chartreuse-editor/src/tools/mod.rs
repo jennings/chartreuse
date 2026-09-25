@@ -27,20 +27,24 @@
 
 mod arrow;
 mod drag;
+mod handles;
 mod line;
 mod rectangle;
+mod select;
 mod text;
 
 use std::fmt;
 
 use iced::mouse::Interaction;
 
-use crate::model::{Document, Point, Shape, Style};
+use crate::model::{AnnotationId, Document, Point, Shape, Style, Vector};
 
 pub use arrow::ArrowTool;
 pub use drag::{DragShape, DragTool};
+pub use handles::{handle_at, handles, reshaped, Handle, HANDLE_REACH, HANDLE_SIZE};
 pub use line::LineTool;
 pub use rectangle::RectangleTool;
+pub use select::SelectTool;
 pub use text::{TextEdit, TextInput, TextTarget, TextTool};
 
 /// How far from an annotation's drawn area a click still hits it, in canvas
@@ -55,6 +59,7 @@ pub const DRAG_THRESHOLD: f32 = 3.0;
 /// The kinds of tool, one per toolbar button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolKind {
+    Select,
     Line,
     Arrow,
     Rectangle,
@@ -63,12 +68,19 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every kind, in toolbar order.
-    pub const ALL: [Self; 4] = [Self::Line, Self::Arrow, Self::Rectangle, Self::Text];
+    pub const ALL: [Self; 5] = [
+        Self::Select,
+        Self::Line,
+        Self::Arrow,
+        Self::Rectangle,
+        Self::Text,
+    ];
 
     /// The name shown in the toolbar.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Select => "Select",
             Self::Line => "Line",
             Self::Arrow => "Arrow",
             Self::Rectangle => "Rectangle",
@@ -80,6 +92,7 @@ impl ToolKind {
     #[must_use]
     pub fn create(self) -> Box<dyn Tool> {
         match self {
+            Self::Select => Box::<SelectTool>::default(),
             Self::Line => Box::<LineTool>::default(),
             Self::Arrow => Box::<ArrowTool>::default(),
             Self::Rectangle => Box::<RectangleTool>::default(),
@@ -124,6 +137,12 @@ impl Context<'_> {
     pub fn drag_threshold(&self) -> f32 {
         DRAG_THRESHOLD * self.pixel
     }
+
+    /// [`HANDLE_REACH`] in document units.
+    #[must_use]
+    pub fn handle_reach(&self) -> f32 {
+        HANDLE_REACH * self.pixel
+    }
 }
 
 /// What the canvas draws for a tool's in-progress gesture.
@@ -136,6 +155,11 @@ pub enum Preview<'a> {
     /// Text being edited, drawn with a caret at its end. An existing text
     /// annotation being edited is hidden meanwhile.
     Text(&'a TextEdit),
+    /// Annotations drawn moved by a vector (a move in progress).
+    Moved(&'a [AnnotationId], Vector),
+    /// An annotation drawn with a different shape (a handle drag in
+    /// progress).
+    Reshaped(AnnotationId, &'a Shape),
 }
 
 /// An annotation tool: a state machine turning pointer events into commands

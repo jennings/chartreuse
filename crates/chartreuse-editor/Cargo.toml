@@ -18,5 +18,10 @@ smol_str = "0.2.2"
 # cosmic-text).
 unicode-segmentation = "1.13.3"
 
+[dev-dependencies]
+# Tests drive the canvas's widget tree headlessly through `UserInterface`,
+# which iced does not re-export. Same version as `iced`.
+iced_runtime = "=0.14.0"
+
 [lints]
 workspace = true

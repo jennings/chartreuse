@@ -6,6 +6,7 @@ use std::marker::PhantomData;
 
 use iced::mouse::Interaction;
 
+use super::handles::{handle_at, Reshape};
 use super::{Context, Pointer, Preview, Tool, ToolKind};
 use crate::model::{Document, Point, Shape};
 
@@ -24,9 +25,19 @@ pub trait DragShape: fmt::Debug + 'static {
 /// [`DRAG_THRESHOLD`](super::DRAG_THRESHOLD) from the press, the shape is
 /// previewed, and releasing adds it (one undo step) and selects it. Releasing
 /// before that point adds nothing, so clicks and tiny drags are ignored.
+///
+/// Pressing on a [handle](super::handles) of the lone selected annotation
+/// (such as the shape just drawn) drags the handle instead, as the select
+/// tool does.
 pub struct DragTool<S> {
-    drag: Option<Drag>,
+    gesture: Option<Gesture>,
     shape: PhantomData<S>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Gesture {
+    Create(Drag),
+    Reshape(Reshape),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,7 +52,7 @@ struct Drag {
 impl<S> Default for DragTool<S> {
     fn default() -> Self {
         Self {
-            drag: None,
+            gesture: None,
             shape: PhantomData,
         }
     }
@@ -51,7 +62,7 @@ impl<S: DragShape> fmt::Debug for DragTool<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DragTool")
             .field("kind", &S::KIND)
-            .field("drag", &self.drag)
+            .field("gesture", &self.gesture)
             .finish()
     }
 }
@@ -61,11 +72,16 @@ impl<S: DragShape> DragTool<S> {
         S::shape(drag.start, drag.end, drag.constrain)
     }
 
-    /// Adds the dragged shape if the drag got past the threshold.
-    fn commit(drag: Drag, cx: &mut Context<'_>) {
-        if drag.moved {
-            let id = cx.document.add(Self::shape(&drag), cx.style);
-            cx.document.set_selection([id]);
+    /// Records the gesture: adds the dragged shape if the drag got past the
+    /// threshold, or the reshaped annotation.
+    fn commit(gesture: Gesture, cx: &mut Context<'_>) {
+        match gesture {
+            Gesture::Create(drag) if drag.moved => {
+                let id = cx.document.add(Self::shape(&drag), cx.style);
+                cx.document.set_selection([id]);
+            }
+            Gesture::Create(_) => {}
+            Gesture::Reshape(reshape) => reshape.commit(cx.document),
         }
     }
 }
@@ -78,46 +94,54 @@ impl<S: DragShape> Tool for DragTool<S> {
     fn pointer(&mut self, pointer: Pointer, cx: &mut Context<'_>) {
         match pointer {
             Pointer::Press { at, .. } => {
-                self.drag = Some(Drag {
-                    start: at,
-                    end: at,
-                    constrain: cx.shift,
-                    moved: false,
+                let reshape = handle_at(cx.document, at, cx.handle_reach())
+                    .and_then(|(id, handle)| Reshape::start(cx.document, id, handle, at));
+                self.gesture = Some(match reshape {
+                    Some(reshape) => Gesture::Reshape(reshape),
+                    None => Gesture::Create(Drag {
+                        start: at,
+                        end: at,
+                        constrain: cx.shift,
+                        moved: false,
+                    }),
                 });
             }
-            Pointer::Move { at } => {
-                if let Some(drag) = &mut self.drag {
+            Pointer::Move { at } => match &mut self.gesture {
+                Some(Gesture::Create(drag)) => {
                     drag.end = at;
                     drag.constrain = cx.shift;
                     drag.moved |= at.distance(drag.start) > cx.drag_threshold();
                 }
-            }
+                Some(Gesture::Reshape(reshape)) => {
+                    reshape.drag_to(at, cx.shift, cx.drag_threshold());
+                }
+                None => {}
+            },
             Pointer::Release { at } => {
                 self.pointer(Pointer::Move { at }, cx);
-                if let Some(drag) = self.drag.take() {
-                    Self::commit(drag, cx);
-                }
+                self.finish(cx);
             }
         }
     }
 
     fn escape(&mut self, _cx: &mut Context<'_>) -> bool {
-        self.drag.take().is_some()
+        self.gesture.take().is_some()
     }
 
     fn finish(&mut self, cx: &mut Context<'_>) {
-        if let Some(drag) = self.drag.take() {
-            Self::commit(drag, cx);
+        if let Some(gesture) = self.gesture.take() {
+            Self::commit(gesture, cx);
         }
     }
 
     fn is_active(&self) -> bool {
-        self.drag.is_some()
+        self.gesture.is_some()
     }
 
     fn preview(&self) -> Preview<'_> {
-        match &self.drag {
-            Some(drag) if drag.moved => Preview::New(Self::shape(drag)),
+        match &self.gesture {
+            Some(Gesture::Create(drag)) if drag.moved => Preview::New(Self::shape(drag)),
+            Some(Gesture::Reshape(reshape)) => Preview::Reshaped(reshape.id(), reshape.shape()),
             _ => Preview::None,
         }
     }

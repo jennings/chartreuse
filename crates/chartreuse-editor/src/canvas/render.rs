@@ -9,6 +9,7 @@ use iced::{Color, Pixels, Point as CanvasPoint, Rectangle, Vector as CanvasVecto
 use super::Viewport;
 use crate::font;
 use crate::model::{Point, Rect, Shape, Size, Style, Text, Vector};
+use crate::tools::HANDLE_SIZE;
 
 /// Dashes for chrome outlines, in canvas pixels.
 const DASH: [f32; 2] = [4.0, 3.0];
@@ -140,6 +141,31 @@ pub fn text_edit(
         CanvasPoint::new(top.x - width / 2.0, top.y),
         iced::Size::new(width, line),
         color(style.color),
+    );
+}
+
+/// A selected annotation's outline: a thin `accent` rectangle just outside
+/// its bounds (document units).
+pub fn selection_outline(frame: &mut Frame, viewport: &Viewport, bounds: Rect, accent: Color) {
+    let outline = grow(viewport.to_canvas_rect(bounds), OUTLINE_GAP);
+    frame.stroke_rectangle(
+        outline.position(),
+        outline.size(),
+        Stroke::default().with_width(1.0).with_color(accent),
+    );
+}
+
+/// A selection handle centered on `center`: a white square with an `accent`
+/// border, [`HANDLE_SIZE`] across.
+pub fn handle(frame: &mut Frame, center: CanvasPoint, accent: Color) {
+    let half = HANDLE_SIZE / 2.0;
+    let top_left = CanvasPoint::new(center.x - half, center.y - half);
+    let size = iced::Size::new(HANDLE_SIZE, HANDLE_SIZE);
+    frame.fill_rectangle(top_left, size, Color::WHITE);
+    frame.stroke_rectangle(
+        top_left,
+        size,
+        Stroke::default().with_width(1.5).with_color(accent),
     );
 }
 
