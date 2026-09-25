@@ -44,6 +44,9 @@
 //! the displays it covers ([`output_grid`], built on
 //! `DisplayLayout::capture_grid`): a selection spanning a 1× and a 2× display is
 //! output at 2×, the 1× part upscaled. The size label shows that output size.
+//!
+//! Try it without real capture: `cargo run -p chartreuse-overlay --example
+//! rectangle_harness`.
 
 mod canvas;
 mod selection;

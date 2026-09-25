@@ -13,5 +13,11 @@ chartreuse-core.workspace = true
 chartreuse-platform.workspace = true
 iced.workspace = true
 
+[dev-dependencies]
+# The `rectangle_harness` example crops and encodes commits, and drives the fake
+# backend's capture future.
+chartreuse-imaging.workspace = true
+futures.workspace = true
+
 [lints]
 workspace = true

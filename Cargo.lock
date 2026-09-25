@@ -609,7 +609,9 @@ name = "chartreuse-overlay"
 version = "0.1.0"
 dependencies = [
  "chartreuse-core",
+ "chartreuse-imaging",
  "chartreuse-platform",
+ "futures",
  "iced",
 ]
 
