@@ -250,11 +250,11 @@ setup in `chartreuse-overlay`
 
 Depends on: 1D. Owns: `chartreuse-overlay::rectangle`
 
-- [ ] `Canvas` program: frozen image, translucent dim, live selection box
-- [ ] State machine for press, drag, release, and Escape; emits commit or cancel
-- [ ] Selections that span displays, in global coordinates
-- [ ] Output scale for selections across mixed-scale displays: define it and test it
-- [ ] Development harness using the `fake` backend
+- [x] `Canvas` program: frozen image, translucent dim, live selection box
+- [x] State machine for press, drag, release, and Escape; emits commit or cancel
+- [x] Selections that span displays, in global coordinates
+- [x] Output scale for selections across mixed-scale displays: define it and test it
+- [x] Development harness using the `fake` backend
 
 ### 2E — Editor canvas and M4 tools
 
