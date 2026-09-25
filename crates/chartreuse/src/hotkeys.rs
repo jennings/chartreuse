@@ -6,10 +6,17 @@
 //! # Startup
 //!
 //! `boot` schedules [`Message::Register`] (Carbon needs the running event loop),
-//! which registers [`m1_bindings`]: for milestone 1, one hardcoded hotkey,
-//! **Ctrl+Alt+Shift+4 → capture rectangle**. It stays clear of the system
-//! screenshot shortcuts (Shift+Command+3/4/5), which macOS keeps for itself.
-//! Pressing it logs `hotkey pressed: Capture rectangle`.
+//! which registers [`default_bindings`], one hotkey per capture mode:
+//!
+//! | Hotkey             | Mode              |
+//! |--------------------|-------------------|
+//! | Ctrl+Alt+Shift+3   | Capture display   |
+//! | Ctrl+Alt+Shift+4   | Capture rectangle |
+//! | Ctrl+Alt+Shift+5   | Capture window    |
+//!
+//! They echo the system screenshot shortcuts (Shift+Command+3/4/5) without
+//! clashing with them, since macOS keeps those for itself. Settings (3A) will make
+//! them configurable. Pressing one logs, e.g., `hotkey pressed: Capture display`.
 //!
 //! # Failures
 //!
@@ -38,22 +45,31 @@ pub struct State {
 /// This feature's messages ([`AppMessage::Hotkeys`]).
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// Register the startup set ([`m1_bindings`]). Sent by `boot`.
+    /// Register the startup set ([`default_bindings`]). Sent by `boot`.
     Register,
     /// A registered hotkey was pressed.
     Pressed(HotkeyEvent),
 }
 
-/// The milestone 1 hotkey set: Ctrl+Alt+Shift+4 starts a rectangle capture.
+/// The startup hotkey set: Ctrl+Alt+Shift+3, 4, and 5 capture a display, a
+/// rectangle, and a window.
 #[must_use]
-pub fn m1_bindings() -> Vec<HotkeyBinding> {
-    vec![HotkeyBinding {
-        mode: CaptureMode::Rectangle,
-        hotkey: Hotkey::new(
-            Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT,
-            Key::Digit4,
-        ),
-    }]
+pub fn default_bindings() -> Vec<HotkeyBinding> {
+    let hotkey = |key| Hotkey::new(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT, key);
+    vec![
+        HotkeyBinding {
+            mode: CaptureMode::Display,
+            hotkey: hotkey(Key::Digit3),
+        },
+        HotkeyBinding {
+            mode: CaptureMode::Rectangle,
+            hotkey: hotkey(Key::Digit4),
+        },
+        HotkeyBinding {
+            mode: CaptureMode::Window,
+            hotkey: hotkey(Key::Digit5),
+        },
+    ]
 }
 
 /// Replaces the registered hotkeys with `bindings` and returns the task to
@@ -106,7 +122,7 @@ pub fn boot(_app: &mut App) -> Task<AppMessage> {
 
 pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
     match message {
-        Message::Register => reregister(app, m1_bindings()),
+        Message::Register => reregister(app, default_bindings()),
         Message::Pressed(event) => {
             tracing::info!(hotkey = %event.hotkey, "hotkey pressed: {}", event.mode);
             Task::none()
@@ -153,38 +169,62 @@ mod tests {
         assert!(fake.registered_hotkeys().is_empty());
 
         let _ = app.update(AppMessage::Hotkeys(Message::Register));
-        assert_eq!(fake.registered_hotkeys(), m1_bindings());
+        assert_eq!(fake.registered_hotkeys(), default_bindings());
         assert_eq!(alerts(&app), 0);
     }
 
     #[test]
-    fn a_press_arrives_as_a_message_and_is_logged() {
+    fn the_defaults_bind_every_mode_to_its_own_hotkey() {
+        let bindings = default_bindings();
+        let modes: Vec<CaptureMode> = bindings.iter().map(|binding| binding.mode).collect();
+        assert_eq!(modes.len(), CaptureMode::ALL.len());
+        for mode in CaptureMode::ALL {
+            assert!(modes.contains(&mode), "{mode} has no hotkey");
+        }
+        for (index, binding) in bindings.iter().enumerate() {
+            assert!(
+                bindings[..index]
+                    .iter()
+                    .all(|other| other.hotkey != binding.hotkey),
+                "{} is bound twice",
+                binding.hotkey
+            );
+        }
+    }
+
+    #[test]
+    fn presses_arrive_as_messages_and_are_logged() {
         let (mut app, fake) = App::for_test();
         let _ = update(&mut app, Message::Register);
-        let [m1] = m1_bindings()[..] else {
-            panic!("one M1 hotkey");
-        };
-        assert!(fake.press_hotkey(m1.hotkey));
-
         let mut recipes = into_recipes(subscription(&app));
         assert_eq!(recipes.len(), 1);
-        let recipe = recipes.pop().unwrap();
-        let message = block_on(recipe.stream(futures::stream::empty().boxed()).next());
-        let Some(AppMessage::Hotkeys(Message::Pressed(event))) = message else {
-            panic!("expected a press, got {message:?}");
-        };
-        assert_eq!(
-            event,
-            HotkeyEvent {
-                mode: CaptureMode::Rectangle,
-                hotkey: m1.hotkey
-            }
-        );
+        let mut presses = recipes
+            .pop()
+            .unwrap()
+            .stream(futures::stream::empty().boxed());
 
-        let log = logged(|| {
-            let _ = update(&mut app, Message::Pressed(event));
-        });
-        assert!(log.contains("hotkey pressed: Capture rectangle"), "{log}");
+        for binding in default_bindings() {
+            assert!(fake.press_hotkey(binding.hotkey));
+            let message = block_on(presses.next());
+            let Some(AppMessage::Hotkeys(Message::Pressed(event))) = message else {
+                panic!("expected a press, got {message:?}");
+            };
+            assert_eq!(
+                event,
+                HotkeyEvent {
+                    mode: binding.mode,
+                    hotkey: binding.hotkey
+                }
+            );
+
+            let log = logged(|| {
+                let _ = update(&mut app, Message::Pressed(event));
+            });
+            assert!(
+                log.contains(&format!("hotkey pressed: {}", binding.mode)),
+                "{log}"
+            );
+        }
     }
 
     #[test]
@@ -229,14 +269,14 @@ mod tests {
         let old_events = app.hotkeys.registration.as_ref().unwrap().events.clone();
 
         // The same set again: the old registration is gone first, so no clash.
-        let _ = reregister(&mut app, m1_bindings());
-        assert_eq!(fake.registered_hotkeys(), m1_bindings());
+        let _ = reregister(&mut app, default_bindings());
+        assert_eq!(fake.registered_hotkeys(), default_bindings());
         assert_eq!(alerts(&app), 0);
 
         let window = binding(CaptureMode::Window, Key::W);
         let _ = reregister(&mut app, vec![window]);
         assert_eq!(fake.registered_hotkeys(), [window]);
-        assert!(!fake.press_hotkey(m1_bindings()[0].hotkey));
+        assert!(!fake.press_hotkey(default_bindings()[0].hotkey));
         assert!(fake.press_hotkey(window.hotkey));
         let registration = app.hotkeys.registration.as_ref().unwrap();
         assert_ne!(registration.events, old_events, "a new subscription");
@@ -264,7 +304,7 @@ mod tests {
         let _ = update(&mut app, Message::Register);
         app.platform.hotkeys = Box::new(Unavailable);
 
-        let _ = reregister(&mut app, m1_bindings());
+        let _ = reregister(&mut app, default_bindings());
         assert_eq!(alerts(&app), 1);
         assert!(app.hotkeys.registration.is_none());
         assert!(fake.registered_hotkeys().is_empty());
