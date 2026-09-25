@@ -9,6 +9,24 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+chartreuse-core.workspace = true
+futures.workspace = true
+parking_lot = "0.12.5"
+raw-window-handle = "0.6.2"
+tracing.workspace = true
+
+# The shared macOS bindings (see the workspace manifest). Declared up front so the
+# macOS tracks never need to edit this file.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-graphics.workspace = true
+objc2-foundation.workspace = true
+objc2-screen-capture-kit.workspace = true
+objc2-uniform-type-identifiers.workspace = true
 
 [lints]
 workspace = true
