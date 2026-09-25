@@ -53,85 +53,86 @@ cannot start until it is made.
 The goal is a signed, launchable, blank app. It also fixes every cross-crate contract in
 place, so that Stage 1 agents can work without editing each other's code.
 
-- [ ] Cargo workspace
-  - [ ] Root `Cargo.toml`: workspace members, shared `[workspace.dependencies]` (pin
+- [x] Cargo workspace
+  - [x] Root `Cargo.toml`: workspace members, shared `[workspace.dependencies]` (pin
         iced), `[workspace.lints]`, edition, `rust-toolchain.toml`
-  - [ ] Choose the macOS bindings (e.g. the `objc2` family) and add them as workspace
+  - [x] Choose the macOS bindings (e.g. the `objc2` family) and add them as workspace
         dependencies, so that every macOS track uses the same bindings
   - [x] `.gitignore` for `target/`
-  - [ ] Create these crates as compiling stubs:
-    - [ ] `crates/chartreuse`: binary; iced daemon and app core
-    - [ ] `crates/chartreuse-core`: shared types and pure logic
-    - [ ] `crates/chartreuse-platform`: platform traits and per-OS backends
-    - [ ] `crates/chartreuse-imaging`: pixel operations, encode and decode
-    - [ ] `crates/chartreuse-config`: settings schema and persistence
-    - [ ] `crates/chartreuse-overlay`: selection overlay canvas programs
-    - [ ] `crates/chartreuse-editor`: document model, tools, editor canvas
-    - [ ] `xtask`: build automation, plus the `cargo xtask` alias in
+  - [x] Create these crates as compiling stubs:
+    - [x] `crates/chartreuse`: binary; iced daemon and app core
+    - [x] `crates/chartreuse-core`: shared types and pure logic
+    - [x] `crates/chartreuse-platform`: platform traits and per-OS backends
+    - [x] `crates/chartreuse-imaging`: pixel operations, encode and decode
+    - [x] `crates/chartreuse-config`: settings schema and persistence
+    - [x] `crates/chartreuse-overlay`: selection overlay canvas programs
+    - [x] `crates/chartreuse-editor`: document model, tools, editor canvas
+    - [x] `xtask`: build automation, plus the `cargo xtask` alias in
           `.cargo/config.toml`
-- [ ] xtask (see [Build system](PLAN.md#build-system))
-  - [ ] `check`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
-  - [ ] `bundle` (see [macOS code signing](PLAN.md#macos-code-signing)): assemble
+- [x] xtask (see [Build system](PLAN.md#build-system))
+  - [x] `check`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
+  - [x] `bundle` (see [macOS code signing](PLAN.md#macos-code-signing)): assemble
         `target/debug/Chartreuse Dev.app` with an `Info.plist` containing
         `LSUIElement` and `LSMinimumSystemVersion` 14.0, plus a placeholder `.icns` built
         with `iconutil`
-  - [ ] Signing: `codesign` with the identity from an env var (e.g.
+  - [x] Signing: `codesign` with the identity from an env var (e.g.
         `CHARTREUSE_SIGN_IDENTITY`) and hardened runtime. If no identity is set, sign
         ad-hoc and print a loud warning. Print the designated requirement, and warn if
         it contains a `cdhash`.
-  - [ ] `run`: `bundle`, then launch with `open`, with stdout and stderr sent to the
+  - [x] `run`: `bundle`, then launch with `open`, with stdout and stderr sent to the
         terminal
-  - [ ] `release`: picks the steps for the host OS. On macOS it builds an optimized,
+  - [x] `release`: picks the steps for the host OS. On macOS it builds an optimized,
         release-flavor `Chartreuse.app` signed with the configured identity; 5A extends
         it to the full notarized disk image. Missing credentials fail with the name of
         the variable to set.
-- [ ] CI (GitHub Actions). Workflows contain no build logic: after checkout and
+- [x] CI (GitHub Actions). Workflows contain no build logic: after checkout and
       installing the toolchain, every step is a `cargo xtask` command. Any new CI need
       becomes an xtask command first.
-  - [ ] macOS runner: `cargo xtask check` and `cargo xtask bundle` (ad-hoc signed)
-  - [ ] Ubuntu and Windows runners: `cargo xtask check`, to keep the `Unsupported`
+  - [x] macOS runner: `cargo xtask check` and `cargo xtask bundle` (ad-hoc signed)
+  - [x] Ubuntu and Windows runners: `cargo xtask check`, to keep the `Unsupported`
         backends compiling until the ports land
-  - [ ] Manually triggered release workflow that runs `cargo xtask release` and uploads
+  - [x] Manually triggered release workflow that runs `cargo xtask release` and uploads
         the output (credentials added in 5A)
-- [ ] Build flavor (`chartreuse-core::flavor`)
-  - [ ] Compile-time dev/release switch that is independent of the Cargo profile (a
+- [x] Build flavor (`chartreuse-core::flavor`)
+  - [x] Compile-time dev/release switch that is independent of the Cargo profile (a
         cargo feature or build-time env var that the xtask sets)
-  - [ ] Constants for the bundle identifier, display name, and accent color (`#f0cc00`
+  - [x] Constants for the bundle identifier, display name, and accent color (`#f0cc00`
         for dev, `#80ff00` for release)
-- [ ] Shared types in `chartreuse-core` (real signatures, minimal bodies)
-  - [ ] Geometry: logical and physical points, sizes, and rects; scale factor
-  - [ ] `DisplayInfo`, `WindowInfo` (bounds, z-order, owner), `DisplayId`, `WindowId`
-  - [ ] `Image`: an RGBA8 buffer with its physical pixel size
-  - [ ] `Hotkey` (modifiers + key), `CaptureMode` (display / window / rectangle)
-  - [ ] Error type
-- [ ] Platform contracts in `chartreuse-platform`
-  - [ ] Traits: `Displays`, `Capture`, `WindowList`, `Hotkeys`, `StatusItem`,
+- [x] Shared types in `chartreuse-core` (real signatures, minimal bodies)
+  - [x] Geometry: logical and physical points, sizes, and rects; scale factor
+  - [x] `DisplayInfo`, `WindowInfo` (bounds, z-order, owner), `DisplayId`, `WindowId`
+  - [x] `Image`: an RGBA8 buffer with its physical pixel size
+  - [x] `Hotkey` (modifiers + key), `CaptureMode` (display / window / rectangle)
+  - [x] Error type
+- [x] Platform contracts in `chartreuse-platform`
+  - [x] Traits: `Displays`, `Capture`, `WindowList`, `Hotkeys`, `StatusItem`,
         `Clipboard`, `FileDialogs`, `OverlayWindowStyle` (applied through the native
         window handle), `Permissions`
-  - [ ] `platform::current()` chooses the backend with `cfg`. Backends that are not
+  - [x] `platform::current()` chooses the backend with `cfg`. Backends that are not
         implemented yet return `Error::Unsupported`, so every target compiles.
-  - [ ] Module layout: `macos/`, `windows/`, `linux/x11/`, `linux/wayland/`, with one
+  - [x] Module layout: `macos/`, `windows/`, `linux/x11/`, `linux/wayland/`, with one
         file per trait, so parallel tracks don't touch the same files
-  - [ ] `fake` backend (synthetic displays, windows, and generated images) for tests
+  - [x] `fake` backend (synthetic displays, windows, and generated images) for tests
         and for UI work without real capture
-- [ ] App core skeleton in `crates/chartreuse`
-  - [ ] Start `iced::daemon` with zero windows plus one blank placeholder window, to
+- [x] App core skeleton in `crates/chartreuse`
+  - [x] Start `iced::daemon` with zero windows plus one blank placeholder window, to
         prove that windows open and close
-  - [ ] A `Message` enum with a variant group for every planned source: hotkey, status
+  - [x] A `Message` enum with a variant group for every planned source: hotkey, status
         item menu, capture result, overlay, editor, settings, import/export
-  - [ ] One handler module per feature (`hotkeys.rs`, `tray.rs`, `capture.rs`,
+  - [x] One handler module per feature (`hotkeys.rs`, `tray.rs`, `capture.rs`,
         `overlay.rs`, `editor.rs`, `settings.rs`, `import.rs`, `export.rs`), each
         starting empty, so integration work doesn't collide
-  - [ ] A window registry mapping each window id to its kind (overlay, editor, settings,
+  - [x] A window registry mapping each window id to its kind (overlay, editor, settings,
         alert)
-  - [ ] `report_error` user-notice path: a simple alert window that later tracks use for
+  - [x] `report_error` user-notice path: a simple alert window that later tracks use for
         hotkey conflicts, an empty clipboard, decode failures, etc.
-  - [ ] A theme built from the flavor's accent color
-  - [ ] `tracing` logging to stderr
-- [ ] README: development setup (certificate, env var, `cargo xtask run`)
-- [ ] Verify: `cargo xtask run` opens a blank window with the yellow accent and no Dock
-      icon; `cargo xtask release` produces a green-accent `Chartreuse.app`; CI is green
-      on all three runners
+  - [x] A theme built from the flavor's accent color
+  - [x] `tracing` logging to stderr
+- [x] README: development setup (certificate, env var, `cargo xtask run`)
+- [ ] Verify
+  - [x] `cargo xtask run` opens a blank window with the yellow accent and no Dock icon
+  - [x] `cargo xtask release` produces a green-accent `Chartreuse.app`
+  - [ ] CI is green on all three runners (not run yet: the repository has no remote)
 
 **Gate:** everything above is merged. From here on, agents work in parallel.
 
