@@ -3,12 +3,18 @@
 
 use chartreuse_core::color::Rgba8;
 use iced::advanced::text::{LineHeight, Shaping};
-use iced::widget::canvas::{self, Frame, LineCap, LineJoin, Path, Stroke};
-use iced::{Color, Pixels, Point as CanvasPoint};
+use iced::widget::canvas::{self, Frame, LineCap, LineDash, LineJoin, Path, Stroke};
+use iced::{Color, Pixels, Point as CanvasPoint, Rectangle, Vector as CanvasVector};
 
 use super::Viewport;
 use crate::font;
-use crate::model::{Shape, Style, Text};
+use crate::model::{Point, Rect, Shape, Size, Style, Text, Vector};
+
+/// Dashes for chrome outlines, in canvas pixels.
+const DASH: [f32; 2] = [4.0, 3.0];
+
+/// How far chrome outlines sit outside what they outline, in canvas pixels.
+const OUTLINE_GAP: f32 = 4.0;
 
 /// Converts a model color (straight alpha) to an iced color.
 #[must_use]
@@ -97,6 +103,52 @@ pub fn canvas_text(
         shaping: Shaping::Advanced,
         ..canvas::Text::default()
     }
+}
+
+/// The chrome of a text edit whose layout box is at `position` and `size`: a
+/// dashed `accent` outline around the box, and a caret (in the text's color)
+/// `caret` from the box's top-left corner, one line tall.
+pub fn text_edit(
+    frame: &mut Frame,
+    viewport: &Viewport,
+    position: Point,
+    size: Size,
+    caret: Vector,
+    style: &Style,
+    accent: Color,
+) {
+    let outline = grow(
+        viewport.to_canvas_rect(Rect::new(position, size)),
+        OUTLINE_GAP,
+    );
+    frame.stroke_rectangle(
+        outline.position(),
+        outline.size(),
+        Stroke {
+            line_dash: LineDash {
+                segments: &DASH,
+                offset: 0,
+            },
+            ..Stroke::default().with_width(1.0).with_color(accent)
+        },
+    );
+
+    let line = style.font_size.max(0.0) * Text::LINE_HEIGHT * viewport.scale();
+    let top = viewport.to_canvas(position + caret);
+    let width = (line * 0.06).clamp(1.5, 4.0);
+    frame.fill_rectangle(
+        CanvasPoint::new(top.x - width / 2.0, top.y),
+        iced::Size::new(width, line),
+        color(style.color),
+    );
+}
+
+/// `rect` grown by `amount` on every side.
+fn grow(rect: Rectangle, amount: f32) -> Rectangle {
+    Rectangle::new(
+        rect.position() - CanvasVector::new(amount, amount),
+        iced::Size::new(rect.width + 2.0 * amount, rect.height + 2.0 * amount),
+    )
 }
 
 fn stroke(width: f32, paint: Color) -> Stroke<'static> {

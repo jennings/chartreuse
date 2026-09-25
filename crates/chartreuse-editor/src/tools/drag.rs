@@ -115,7 +115,7 @@ impl<S: DragShape> Tool for DragTool<S> {
         self.drag.is_some()
     }
 
-    fn preview(&self) -> Preview {
+    fn preview(&self) -> Preview<'_> {
         match &self.drag {
             Some(drag) if drag.moved => Preview::New(Self::shape(drag)),
             _ => Preview::None,

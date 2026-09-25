@@ -7,8 +7,8 @@ use iced::{keyboard, Element};
 
 use crate::canvas::{self, Input, InputKind, View, Viewport, Zoom};
 use crate::font;
-use crate::model::{Document, Size, Style};
-use crate::tools::{Context, Pointer, Tool, ToolKind};
+use crate::model::{Document, Shape, Size, Style};
+use crate::tools::{Context, Pointer, TextInput, Tool, ToolKind};
 
 /// Canvas pixels of Cmd-scrolling that double (or halve) the zoom.
 const SCROLL_PER_DOUBLING: f32 = 200.0;
@@ -19,6 +19,8 @@ const SCROLL_PER_DOUBLING: f32 = 200.0;
 pub enum Message {
     /// Input from the canvas.
     Canvas(Input),
+    /// Switches to a tool, first finishing whatever the current one was doing.
+    Tool(ToolKind),
 }
 
 /// Something the editor asks its owner to do, returned by [`Editor::update`].
@@ -94,7 +96,9 @@ impl Editor {
     pub fn update(&mut self, message: Message) -> Option<Event> {
         match message {
             Message::Canvas(input) => self.canvas_input(input),
+            Message::Tool(kind) => self.set_tool(kind),
         }
+        self.measure_text();
         None
     }
 
@@ -145,6 +149,11 @@ impl Editor {
                     self.view.pan_by(delta, self.canvas, image);
                 }
             }
+            InputKind::Key {
+                key,
+                modifiers,
+                text,
+            } => self.key(&key, modifiers, text.as_deref()),
             InputKind::Modifiers(modifiers) => {
                 self.modifiers = modifiers;
                 // Let a drag in progress pick up Shift without waiting for the
@@ -155,6 +164,60 @@ impl Editor {
                     self.pointer_at(position, |at| Pointer::Move { at });
                 }
             }
+        }
+    }
+
+    fn set_tool(&mut self, kind: ToolKind) {
+        if kind != self.tool.kind() {
+            self.with_tool(|tool, cx| tool.finish(cx));
+            self.tool = kind.create();
+        }
+    }
+
+    /// Handles a key press: typing while a text edit is open.
+    fn key(&mut self, key: &keyboard::Key, modifiers: keyboard::Modifiers, text: Option<&str>) {
+        use keyboard::key::Named;
+        use keyboard::Key;
+
+        if self.tool.text_edit().is_none() {
+            return;
+        }
+        let input = match key.as_ref() {
+            Key::Named(Named::Escape) => {
+                self.with_tool(|tool, cx| tool.escape(cx));
+                return;
+            }
+            Key::Named(Named::Enter) => TextInput::Newline,
+            Key::Named(Named::Backspace) => TextInput::Backspace,
+            _ if modifiers.command() || modifiers.control() => return,
+            _ => match text {
+                Some(text) => TextInput::Insert(text.to_owned()),
+                None => return,
+            },
+        };
+        if let Some(edit) = self.tool.text_edit() {
+            edit.input(input);
+        }
+    }
+
+    /// Reports the laid-out size of every text annotation that has none (new,
+    /// edited, restyled, or restored by undo) to the model, so hit-testing and
+    /// bounds use the real layout.
+    fn measure_text(&mut self) {
+        let unmeasured: Vec<_> = self
+            .document
+            .annotations()
+            .iter()
+            .filter_map(|annotation| match &annotation.shape {
+                Shape::Text(text) if text.measured().is_none() => Some((
+                    annotation.id(),
+                    font::measure(&text.content, annotation.style.font_size),
+                )),
+                _ => None,
+            })
+            .collect();
+        for (id, size) in unmeasured {
+            self.document.set_text_size(id, size);
         }
     }
 
@@ -231,12 +294,57 @@ pub(crate) mod testing {
         input(editor, InputKind::Release { position: to });
     }
 
+    pub fn click(editor: &mut Editor, position: Point) {
+        press(editor, position, 1);
+        input(editor, InputKind::Release { position });
+    }
+
     pub fn scroll(editor: &mut Editor, position: Point, delta: Vector) {
         input(editor, InputKind::Scroll { position, delta });
     }
 
     pub fn modifiers(editor: &mut Editor, modifiers: keyboard::Modifiers) {
         input(editor, InputKind::Modifiers(modifiers));
+    }
+
+    /// A key press with `modifiers`; `text` is what the key types.
+    pub fn key_with(
+        editor: &mut Editor,
+        key: keyboard::Key,
+        modifiers: keyboard::Modifiers,
+        text: Option<&str>,
+    ) -> Option<Event> {
+        input(
+            editor,
+            InputKind::Key {
+                key,
+                modifiers,
+                text: text.map(Into::into),
+            },
+        )
+    }
+
+    /// A named key (Enter, Escape, ...) without modifiers.
+    pub fn named(editor: &mut Editor, named: keyboard::key::Named) -> Option<Event> {
+        key_with(
+            editor,
+            keyboard::Key::Named(named),
+            keyboard::Modifiers::default(),
+            None,
+        )
+    }
+
+    /// Types `text` one character at a time.
+    pub fn type_text(editor: &mut Editor, text: &str) {
+        for c in text.chars() {
+            let s = c.to_string();
+            key_with(
+                editor,
+                keyboard::Key::Character(s.as_str().into()),
+                keyboard::Modifiers::default(),
+                Some(&s),
+            );
+        }
     }
 }
 
@@ -246,7 +354,18 @@ mod tests {
 
     use super::testing::*;
     use super::*;
-    use crate::model::{Line, Point, Shape};
+    use crate::model::{Arrow, Line, Point, Rect, Rectangle, Shape, Text};
+    use keyboard::key::Named;
+
+    fn only_text(editor: &Editor) -> &Text {
+        match editor.document().annotations() {
+            [annotation] => match &annotation.shape {
+                Shape::Text(text) => text,
+                other => panic!("not text: {other:?}"),
+            },
+            other => panic!("expected one annotation, got {other:?}"),
+        }
+    }
 
     #[test]
     fn a_drag_on_the_canvas_adds_one_annotation_in_document_coordinates() {
@@ -325,5 +444,81 @@ mod tests {
                 end: Point::new(100.0, 0.0),
             })
         );
+    }
+
+    #[test]
+    fn each_drag_tool_draws_its_shape() {
+        let mut editor = editor();
+        let (a, b) = (Point::new(10.0, 10.0), Point::new(60.0, 40.0));
+        editor.update(Message::Tool(ToolKind::Arrow));
+        drag(&mut editor, at(a.x, a.y), at(b.x, b.y));
+        editor.update(Message::Tool(ToolKind::Rectangle));
+        drag(&mut editor, at(b.x, b.y), at(a.x, a.y));
+        let shapes: Vec<_> = editor
+            .document()
+            .annotations()
+            .iter()
+            .map(|annotation| annotation.shape.clone())
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                Shape::Arrow(Arrow { start: a, end: b }),
+                Shape::Rectangle(Rectangle {
+                    rect: Rect::from_corners(a, b),
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn typing_into_the_text_tool_commits_one_measured_annotation() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(20.0, 100.0));
+        type_text(&mut editor, "Hi");
+        named(&mut editor, Named::Enter);
+        type_text(&mut editor, "thee");
+        named(&mut editor, Named::Backspace);
+        assert!(editor.document().annotations().is_empty(), "still editing");
+        named(&mut editor, Named::Escape);
+
+        let text = only_text(&editor);
+        assert_eq!(text.content, "Hi\nthe");
+        let size = text.measured().expect("the editor measured it");
+        assert_eq!(size, font::measure("Hi\nthe", Style::default().font_size));
+        assert!(editor.document.undo());
+        assert!(editor.document().annotations().is_empty());
+    }
+
+    #[test]
+    fn shortcut_chords_do_not_type_and_blank_text_is_discarded() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(20.0, 100.0));
+        key_with(
+            &mut editor,
+            keyboard::Key::Character("z".into()),
+            keyboard::Modifiers::COMMAND,
+            Some("z"),
+        );
+        type_text(&mut editor, " ");
+        named(&mut editor, Named::Escape);
+        assert!(editor.document().annotations().is_empty());
+        assert!(!editor.document().can_undo());
+    }
+
+    #[test]
+    fn switching_tools_commits_the_open_text_edit() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(20.0, 100.0));
+        type_text(&mut editor, "Note");
+        editor.update(Message::Tool(ToolKind::Line));
+        assert_eq!(only_text(&editor).content, "Note");
+        assert_eq!(editor.tool(), ToolKind::Line);
+        // Typing no longer goes anywhere.
+        type_text(&mut editor, "x");
+        assert_eq!(only_text(&editor).content, "Note");
     }
 }

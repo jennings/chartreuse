@@ -597,6 +597,8 @@ dependencies = [
  "chartreuse-core",
  "chartreuse-imaging",
  "iced",
+ "smol_str",
+ "unicode-segmentation",
 ]
 
 [[package]]

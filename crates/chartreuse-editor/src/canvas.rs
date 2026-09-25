@@ -34,10 +34,12 @@ use iced::widget::canvas::{self as iced_canvas, Action, Event, Frame, Geometry, 
 use iced::widget::image::FilterMethod;
 use iced::widget::{space, stack, Canvas};
 use iced::{keyboard, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
+use smol_str::SmolStr;
 
 use crate::editor::Message;
-use crate::model::{Annotation, Shape};
-use crate::tools::Preview;
+use crate::font;
+use crate::model::{Annotation, AnnotationId, Shape};
+use crate::tools::{Preview, TextTarget};
 use crate::Editor;
 
 pub use render::color;
@@ -69,6 +71,12 @@ pub enum InputKind {
     Release { position: Point },
     /// A scroll over the canvas, in pixels.
     Scroll { position: Point, delta: Vector },
+    /// A key was pressed. `text` is what it types, if anything.
+    Key {
+        key: keyboard::Key,
+        modifiers: keyboard::Modifiers,
+        text: Option<SmolStr>,
+    },
     /// The keyboard modifiers changed.
     Modifiers(keyboard::Modifiers),
 }
@@ -188,6 +196,16 @@ impl Scene<'_> {
                 };
                 Some(InputKind::Scroll { position, delta })
             }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                modifiers,
+                text,
+                ..
+            }) => Some(InputKind::Key {
+                key: key.clone(),
+                modifiers: *modifiers,
+                text: text.clone(),
+            }),
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                 Some(InputKind::Modifiers(*modifiers))
             }
@@ -214,25 +232,58 @@ impl Scene<'_> {
         );
     }
 
+    /// The annotation the active tool's preview hides: the text being edited.
+    fn hidden(preview: &Preview<'_>) -> Option<AnnotationId> {
+        match preview {
+            Preview::Text(edit) => match edit.target() {
+                TextTarget::Existing(id) => Some(id),
+                TextTarget::New => None,
+            },
+            Preview::None | Preview::New(_) => None,
+        }
+    }
+
     fn draw_annotations(&self, frame: &mut Frame, range: Range<usize>) {
         let viewport = self.editor.viewport(frame.size());
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
+        let hidden = Self::hidden(&self.editor.active_tool().preview());
         let annotations = &self.editor.document().annotations()[range];
         frame.with_clip(clip, |frame| {
             for annotation in annotations {
-                render::shape(frame, &viewport, &annotation.shape, &annotation.style);
+                if Some(annotation.id()) != hidden {
+                    render::shape(frame, &viewport, &annotation.shape, &annotation.style);
+                }
             }
         });
     }
 
-    fn draw_overlay(&self, frame: &mut Frame) {
+    fn draw_overlay(&self, frame: &mut Frame, theme: &Theme) {
         let viewport = self.editor.viewport(frame.size());
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
+        let accent = theme.palette().primary;
         match self.editor.active_tool().preview() {
             Preview::None => {}
             Preview::New(shape) => frame.with_clip(clip, |frame| {
                 render::shape(frame, &viewport, &shape, &self.editor.style());
             }),
+            Preview::Text(edit) => {
+                let style = edit.style();
+                let position = viewport.to_canvas(edit.position());
+                frame.with_clip(clip, |frame| {
+                    let text =
+                        render::canvas_text(edit.content(), position, &style, viewport.scale());
+                    frame.fill_text(text);
+                });
+                render::text_edit(
+                    frame,
+                    &viewport,
+                    edit.position(),
+                    font::measure(edit.content(), style.font_size),
+                    font::caret(edit.content(), style.font_size),
+                    &style,
+                    accent,
+                );
+            }
         }
     }
 }
@@ -275,7 +326,7 @@ impl Program<Message> for Scene<'_> {
         match &self.layer {
             Layer::Base => self.draw_base(&mut frame, theme),
             Layer::Annotations(range) => self.draw_annotations(&mut frame, range.clone()),
-            Layer::Overlay => self.draw_overlay(&mut frame),
+            Layer::Overlay => self.draw_overlay(&mut frame, theme),
         }
         vec![frame.into_geometry()]
     }

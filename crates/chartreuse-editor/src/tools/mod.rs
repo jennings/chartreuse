@@ -25,8 +25,11 @@
 //! [`ToolKind::create`]. Tools that draw a shape by dragging from one corner
 //! or end to the other only need a [`DragShape`] (see `line.rs`).
 
+mod arrow;
 mod drag;
 mod line;
+mod rectangle;
+mod text;
 
 use std::fmt;
 
@@ -34,8 +37,11 @@ use iced::mouse::Interaction;
 
 use crate::model::{Document, Point, Shape, Style};
 
+pub use arrow::ArrowTool;
 pub use drag::{DragShape, DragTool};
 pub use line::LineTool;
+pub use rectangle::RectangleTool;
+pub use text::{TextEdit, TextInput, TextTarget, TextTool};
 
 /// How far from an annotation's drawn area a click still hits it, in canvas
 /// (screen) pixels.
@@ -50,17 +56,23 @@ pub const DRAG_THRESHOLD: f32 = 3.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolKind {
     Line,
+    Arrow,
+    Rectangle,
+    Text,
 }
 
 impl ToolKind {
     /// Every kind, in toolbar order.
-    pub const ALL: [Self; 1] = [Self::Line];
+    pub const ALL: [Self; 4] = [Self::Line, Self::Arrow, Self::Rectangle, Self::Text];
 
     /// The name shown in the toolbar.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Line => "Line",
+            Self::Arrow => "Arrow",
+            Self::Rectangle => "Rectangle",
+            Self::Text => "Text",
         }
     }
 
@@ -69,6 +81,9 @@ impl ToolKind {
     pub fn create(self) -> Box<dyn Tool> {
         match self {
             Self::Line => Box::<LineTool>::default(),
+            Self::Arrow => Box::<ArrowTool>::default(),
+            Self::Rectangle => Box::<RectangleTool>::default(),
+            Self::Text => Box::<TextTool>::default(),
         }
     }
 }
@@ -79,7 +94,7 @@ pub enum Pointer {
     /// The button went down. `clicks` counts consecutive clicks at about the
     /// same place: 1 for a single click, 2 for a double click, and so on.
     Press { at: Point, clicks: u8 },
-    /// The pointer moved while the tool [is active](Tool::is_active).
+    /// The pointer moved while the button was down.
     Move { at: Point },
     /// The button came up.
     Release { at: Point },
@@ -113,11 +128,14 @@ impl Context<'_> {
 
 /// What the canvas draws for a tool's in-progress gesture.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Preview {
+pub enum Preview<'a> {
     /// Nothing in progress.
     None,
     /// A new annotation being drawn, in the editor's current style.
     New(Shape),
+    /// Text being edited, drawn with a caret at its end. An existing text
+    /// annotation being edited is hidden meanwhile.
+    Text(&'a TextEdit),
 }
 
 /// An annotation tool: a state machine turning pointer events into commands
@@ -136,11 +154,17 @@ pub trait Tool: fmt::Debug {
     /// example before switching tools.
     fn finish(&mut self, cx: &mut Context<'_>);
 
-    /// Whether a gesture is in progress.
+    /// Whether a gesture or text edit is in progress.
     fn is_active(&self) -> bool;
 
     /// The in-progress gesture, for the canvas to draw.
-    fn preview(&self) -> Preview;
+    fn preview(&self) -> Preview<'_>;
+
+    /// The open text edit, if any. While there is one, the editor sends typing
+    /// to it instead of treating keys as shortcuts.
+    fn text_edit(&mut self) -> Option<&mut TextEdit> {
+        None
+    }
 
     /// The mouse cursor over document point `at`.
     fn cursor(&self, document: &Document, at: Point, pixel: f32) -> Interaction;
