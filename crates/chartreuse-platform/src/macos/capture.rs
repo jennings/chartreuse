@@ -49,15 +49,15 @@ use chartreuse_core::window::WindowId;
 use chartreuse_core::{Error, Result};
 use futures::channel::oneshot;
 use futures::future::{self, BoxFuture, FutureExt};
-use objc2::AllocAnyThread;
 use objc2::rc::Retained;
+use objc2::AllocAnyThread;
 use objc2_core_foundation::{
     CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize,
 };
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo,
-    CGImageByteOrderInfo, CGPreflightScreenCaptureAccess, CGWindowListCopyWindowInfo,
-    CGWindowListOption, kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowOwnerPID,
+    kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowOwnerPID, CGBitmapContextCreate, CGColorSpace,
+    CGContext, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
+    CGWindowListCopyWindowInfo, CGWindowListOption,
 };
 use objc2_foundation::{NSArray, NSError, NSInteger};
 use objc2_screen_capture_kit::{
