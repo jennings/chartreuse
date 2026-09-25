@@ -21,7 +21,8 @@ tracing.workspace = true
 block2.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
-objc2-app-kit.workspace = true
+# `NSSavePanel.allowedContentTypes` (UTType) is behind this feature.
+objc2-app-kit = { workspace = true, features = ["objc2-uniform-type-identifiers"] }
 objc2-core-foundation.workspace = true
 objc2-core-graphics.workspace = true
 objc2-foundation.workspace = true
