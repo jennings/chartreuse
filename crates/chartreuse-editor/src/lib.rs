@@ -11,6 +11,7 @@ mod editor;
 pub mod flatten;
 pub mod font;
 pub mod model;
+mod toolbar;
 pub mod tools;
 
 pub use editor::{Editor, Event, Message, ZoomChange};

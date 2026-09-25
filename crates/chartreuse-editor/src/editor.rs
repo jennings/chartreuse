@@ -1,26 +1,35 @@
 //! The editor widget: one image being annotated, with its tools, style, zoom,
 //! and pan.
 
+use chartreuse_core::color::Rgba8;
 use chartreuse_core::image::Image;
-use iced::widget::image;
+use iced::widget::{column, image};
 use iced::{keyboard, Element};
 
 use crate::canvas::{self, Input, InputKind, View, Viewport, Zoom, ZOOM_STEP};
 use crate::font;
-use crate::model::{Command, Document, Shape, Size, Style};
+use crate::model::{Command, Document, Shape, Size, Style, StylePatch};
+use crate::toolbar::toolbar;
 use crate::tools::{Context, Pointer, TextInput, Tool, ToolKind};
 
 /// Canvas pixels of Cmd-scrolling that double (or halve) the zoom.
 const SCROLL_PER_DOUBLING: f32 = 200.0;
 
-/// The editor's messages. The canvas and (later) the toolbar produce them;
-/// the app routes them back to [`Editor::update`].
+/// The editor's messages. The canvas and the toolbar produce them; the app
+/// routes them back to [`Editor::update`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     /// Input from the canvas.
     Canvas(Input),
     /// Switches to a tool, first finishing whatever the current one was doing.
     Tool(ToolKind),
+    /// Sets the color for new annotations and restyles the selection (and
+    /// the text being edited).
+    Color(Rgba8),
+    /// Sets the stroke width, like [`Message::Color`].
+    StrokeWidth(f32),
+    /// Sets the font size, like [`Message::Color`].
+    FontSize(f32),
     Undo,
     Redo,
     /// Deletes the selected annotations.
@@ -125,6 +134,27 @@ impl Editor {
                 self.set_tool(kind);
                 None
             }
+            Message::Color(color) => {
+                self.restyle(StylePatch {
+                    color: Some(color),
+                    ..StylePatch::default()
+                });
+                None
+            }
+            Message::StrokeWidth(width) => {
+                self.restyle(StylePatch {
+                    stroke_width: Some(width),
+                    ..StylePatch::default()
+                });
+                None
+            }
+            Message::FontSize(size) => {
+                self.restyle(StylePatch {
+                    font_size: Some(size),
+                    ..StylePatch::default()
+                });
+                None
+            }
             Message::Undo => {
                 self.undo();
                 None
@@ -154,9 +184,9 @@ impl Editor {
         self.measure_text();
     }
 
-    /// The editor's widgets.
+    /// The editor's widgets: the toolbar above the canvas.
     pub fn view(&self) -> Element<'_, Message> {
-        canvas::view(self)
+        column![toolbar(self), canvas::view(self)].into()
     }
 
     pub(crate) const fn image(&self) -> &image::Handle {
@@ -225,6 +255,17 @@ impl Editor {
             self.finish();
             self.tool = kind.create();
         }
+    }
+
+    /// Changes the style for new annotations, the open text edit's style, and
+    /// (as one undo step) the selected annotations' styles.
+    fn restyle(&mut self, patch: StylePatch) {
+        self.style = self.style.patched(&patch);
+        if let Some(edit) = self.tool.text_edit() {
+            edit.restyle(&patch);
+        }
+        let ids = self.document.selection().iter().copied().collect();
+        self.document.apply(Command::Restyle { ids, patch });
     }
 
     fn undo(&mut self) {
@@ -888,5 +929,54 @@ mod tests {
         assert_eq!(editor.zoom(), Zoom::Fit);
         editor.update(Message::Zoom(ZoomChange::ActualSize));
         assert_eq!(editor.zoom(), Zoom::Scale(1.0));
+    }
+
+    const BLUE: Rgba8 = Rgba8::from_rgb_hex(0x00_7a_ff);
+
+    #[test]
+    fn style_changes_apply_to_new_annotations_and_restyle_the_selection() {
+        let mut editor = line_editor();
+        drag(&mut editor, at(10.0, 10.0), at(90.0, 10.0));
+        editor.update(Message::Color(BLUE));
+        editor.update(Message::StrokeWidth(12.0));
+        let annotation = &editor.document().annotations()[0];
+        assert_eq!(annotation.style.color, BLUE);
+        assert_eq!(annotation.style.stroke_width, 12.0);
+        assert_eq!(editor.style().color, BLUE);
+
+        assert!(editor.document.undo(), "each change is one step");
+        assert_eq!(editor.document().annotations()[0].style.stroke_width, 4.0);
+        assert_eq!(editor.document().annotations()[0].style.color, BLUE);
+        assert!(editor.document.undo());
+        assert_eq!(
+            editor.document().annotations()[0].style.color,
+            Style::DEFAULT_COLOR
+        );
+
+        // With nothing selected only the style for new annotations changes.
+        editor.document.clear_selection();
+        editor.update(Message::Color(Style::DEFAULT_COLOR));
+        assert!(editor.document().can_redo(), "nothing recorded");
+        drag(&mut editor, at(10.0, 100.0), at(90.0, 100.0));
+        let newest = editor.document().annotations().last().unwrap();
+        assert_eq!(newest.style.color, Style::DEFAULT_COLOR);
+        assert_eq!(newest.style.stroke_width, 12.0);
+    }
+
+    #[test]
+    fn style_changes_while_typing_apply_to_the_text_being_edited() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(20.0, 100.0));
+        editor.update(Message::FontSize(48.0));
+        editor.update(Message::Color(BLUE));
+        type_text(&mut editor, "Big");
+        named(&mut editor, Named::Escape);
+        let style = editor.document().annotations()[0].style;
+        assert_eq!((style.font_size, style.color), (48.0, BLUE));
+        assert_eq!(
+            only_text(&editor).measured(),
+            Some(font::measure("Big", 48.0))
+        );
     }
 }
