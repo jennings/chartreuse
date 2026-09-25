@@ -568,6 +568,7 @@ dependencies = [
  "chartreuse-platform",
  "futures",
  "iced",
+ "iced_runtime",
  "tracing",
  "tracing-subscriber",
 ]

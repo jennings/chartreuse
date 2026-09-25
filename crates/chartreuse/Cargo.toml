@@ -21,6 +21,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 futures.workspace = true
+# Tests inspect the actions a `Task` performs (e.g. that Quit exits); iced does
+# not re-export `task::into_stream`. Same version as `iced`.
+iced_runtime = "=0.14.0"
 
 [features]
 # Build the release flavor (see `chartreuse_core::flavor`). Set by
