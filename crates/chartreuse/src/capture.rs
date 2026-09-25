@@ -227,12 +227,15 @@ mod tests {
     use chartreuse_core::permission::PermissionStatus;
     use chartreuse_core::window::WindowId;
     use chartreuse_platform::fake::Fake;
-    use chartreuse_platform::Capture;
+    use chartreuse_platform::{Capture, MenuAction};
     use futures::executor::block_on;
     use futures::future::{self, BoxFuture, FutureExt};
+    use futures::StreamExt;
+    use iced::advanced::subscription::into_recipes;
 
     use super::*;
     use crate::windows::WindowKind;
+    use crate::{hotkeys, tray};
 
     /// A test app whose saves go to a fresh temporary directory.
     fn app() -> (App, Fake, tempfile::TempDir) {
@@ -338,6 +341,46 @@ mod tests {
         assert_eq!(files.len(), 1, "{files:?}");
         assert_eq!(png_size(&files[0]), desktop.size());
         assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(windows(&app, WindowKind::Alert), 0);
+    }
+
+    /// The first message `subscription` delivers.
+    fn next_message(subscription: Subscription<AppMessage>) -> AppMessage {
+        let mut recipes = into_recipes(subscription);
+        assert_eq!(recipes.len(), 1);
+        let events = recipes
+            .pop()
+            .unwrap()
+            .stream(futures::stream::empty().boxed());
+        block_on(events.into_future()).0.expect("a message")
+    }
+
+    #[test]
+    fn the_menu_and_the_display_hotkey_capture_the_desktop() {
+        let (mut app, _default_desktop, saves) = app();
+        let fake = small_desktop();
+        app.platform = fake.platform();
+        let _ = app.settle(AppMessage::Tray(tray::Message::Install));
+        let _ = app.settle(AppMessage::Hotkeys(hotkeys::Message::Register));
+        let desktop = PhysicalSize::new(24, 16);
+
+        assert!(fake.choose_menu_action(MenuAction::Capture(CaptureMode::Display)));
+        let chosen = next_message(tray::subscription(&app));
+        let _ = app.settle(chosen);
+        assert_eq!(fake.clipboard().map(|image| image.size()), Some(desktop));
+        assert_eq!(saved(saves.path()).len(), 1);
+
+        fake.set_clipboard(None);
+        let hotkey = hotkeys::default_bindings()
+            .into_iter()
+            .find(|binding| binding.mode == CaptureMode::Display)
+            .unwrap()
+            .hotkey;
+        assert!(fake.press_hotkey(hotkey));
+        let pressed = next_message(hotkeys::subscription(&app));
+        let _ = app.settle(pressed);
+        assert_eq!(fake.clipboard().map(|image| image.size()), Some(desktop));
+        assert_eq!(saved(saves.path()).len(), 2);
         assert_eq!(windows(&app, WindowKind::Alert), 0);
     }
 

@@ -16,7 +16,8 @@
 //!
 //! They echo the system screenshot shortcuts (Shift+Command+3/4/5) without
 //! clashing with them, since macOS keeps those for itself. Settings (3A) will make
-//! them configurable. Pressing one logs, e.g., `hotkey pressed: Capture display`.
+//! them configurable. Pressing one starts that capture
+//! (`capture::Message::Start`).
 //!
 //! # Failures
 //!
@@ -33,7 +34,7 @@ use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
-use crate::events;
+use crate::{capture, events};
 
 /// This feature's part of the app state ([`App::hotkeys`]).
 #[derive(Debug, Default)]
@@ -125,7 +126,7 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
         Message::Register => reregister(app, default_bindings()),
         Message::Pressed(event) => {
             tracing::info!(hotkey = %event.hotkey, "hotkey pressed: {}", event.mode);
-            Task::none()
+            Task::done(AppMessage::Capture(capture::Message::Start(event.mode)))
         }
     }
 }
@@ -140,9 +141,6 @@ pub fn subscription(app: &App) -> Subscription<AppMessage> {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::sync::mpsc;
-
     use chartreuse_platform::Hotkeys;
     use futures::executor::block_on;
     use futures::StreamExt;
@@ -193,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn presses_arrive_as_messages_and_are_logged() {
+    fn presses_start_the_bound_capture() {
         let (mut app, fake) = App::for_test();
         let _ = update(&mut app, Message::Register);
         let mut recipes = into_recipes(subscription(&app));
@@ -217,12 +215,19 @@ mod tests {
                 }
             );
 
-            let log = logged(|| {
-                let _ = update(&mut app, Message::Pressed(event));
-            });
+            let started: Vec<_> =
+                iced_runtime::task::into_stream(update(&mut app, Message::Pressed(event)))
+                    .map(|stream| block_on(stream.collect()))
+                    .unwrap_or_default();
             assert!(
-                log.contains(&format!("hotkey pressed: {}", binding.mode)),
-                "{log}"
+                matches!(
+                    started.as_slice(),
+                    [iced_runtime::Action::Output(AppMessage::Capture(
+                        capture::Message::Start(mode)
+                    ))] if *mode == binding.mode
+                ),
+                "{}: {started:?}",
+                binding.mode
             );
         }
     }
@@ -308,32 +313,5 @@ mod tests {
         assert_eq!(alerts(&app), 1);
         assert!(app.hotkeys.registration.is_none());
         assert!(fake.registered_hotkeys().is_empty());
-    }
-
-    /// Everything `f` logs, as plain text.
-    fn logged(f: impl FnOnce()) -> String {
-        #[derive(Clone)]
-        struct Writer(mpsc::Sender<Vec<u8>>);
-
-        impl io::Write for Writer {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                // The receiver outlives every write.
-                let _ = self.0.send(buf.to_vec());
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let (sender, lines) = mpsc::channel();
-        let writer = Writer(sender);
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        String::from_utf8(lines.try_iter().flatten().collect()).unwrap()
     }
 }

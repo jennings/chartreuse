@@ -3,14 +3,15 @@
 //! [`boot`] only asks for [`Message::Install`]: iced runs `boot` before the AppKit
 //! run loop starts, and the status item must be created once it runs. [`update`]
 //! installs the item and keeps its handle in [`State`]; while the handle is there,
-//! [`subscription`] delivers menu choices as [`Message::Menu`].
+//! [`subscription`] delivers menu choices as [`Message::Menu`]. The capture items
+//! start a capture (`capture::Message::Start`); Quit quits.
 
 use chartreuse_platform::{MenuAction, StatusItemHandle};
 use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
-use crate::events;
+use crate::{capture, events};
 
 /// This feature's part of the app state ([`App::tray`]).
 #[derive(Debug, Default)]
@@ -66,10 +67,8 @@ fn menu_action(action: MenuAction) -> Task<AppMessage> {
             tracing::info!("quitting from the status item menu");
             iced::exit()
         }
-        MenuAction::Capture(_)
-        | MenuAction::OpenFromClipboard
-        | MenuAction::OpenFromFile
-        | MenuAction::Settings => {
+        MenuAction::Capture(mode) => Task::done(AppMessage::Capture(capture::Message::Start(mode))),
+        MenuAction::OpenFromClipboard | MenuAction::OpenFromFile | MenuAction::Settings => {
             tracing::info!(?action, "status item menu action (not wired up yet)");
             Task::none()
         }
@@ -136,13 +135,29 @@ mod tests {
     }
 
     #[test]
-    fn quit_exits_and_other_actions_do_nothing_yet() {
+    fn capture_items_start_that_capture() {
+        let (mut app, _fake) = App::for_test();
+        for mode in CaptureMode::ALL {
+            let task = app.update(AppMessage::Tray(Message::Menu(MenuAction::Capture(mode))));
+            let started = actions(task);
+            assert!(
+                matches!(
+                    started.as_slice(),
+                    [Action::Output(AppMessage::Capture(capture::Message::Start(chosen)))]
+                        if *chosen == mode
+                ),
+                "{mode}: {started:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn quit_exits_and_the_other_actions_do_nothing_yet() {
         let (mut app, _fake) = App::for_test();
         let quit = actions(app.update(AppMessage::Tray(Message::Menu(MenuAction::Quit))));
         assert!(matches!(quit.as_slice(), [Action::Exit]), "{quit:?}");
 
         for action in [
-            MenuAction::Capture(CaptureMode::Display),
             MenuAction::OpenFromClipboard,
             MenuAction::OpenFromFile,
             MenuAction::Settings,
