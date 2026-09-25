@@ -3,9 +3,11 @@
 //!
 //! Each file exports one backend type with a `new()` constructor. Keep that
 //! constructor infallible and argument-free so this file never changes; do
-//! fallible setup lazily in the trait methods.
+//! fallible setup lazily in the trait methods. `cgimage` is the exception: it
+//! holds no backend, only a conversion the backends share.
 
 mod capture;
+mod cgimage;
 mod clipboard;
 mod dialogs;
 mod displays;

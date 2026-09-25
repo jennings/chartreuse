@@ -12,12 +12,12 @@
 //!    there matches every display to its `SCDisplay` by `CGDirectDisplayID` and
 //!    starts one [`capture_image`] per display, excluding Chartreuse's own windows.
 //! 3. Each capture's completion handler converts the `CGImage` to an [`Image`]
-//!    ([`image_from_cg`]) and resolves a oneshot channel, so the returned future
-//!    only ever holds `Send` data.
+//!    ([`image_from_cg`], from the shared `cgimage` module) and resolves a
+//!    oneshot channel, so the returned future only ever holds `Send` data.
 //!
 //! The private helpers ([`with_shareable_content`], [`stream_configuration`],
-//! [`capture_image`], [`image_from_cg`], [`own_application`], [`error_from_ns`])
-//! are shared with window capture.
+//! [`capture_image`], [`own_application`], [`error_from_ns`]) are shared with
+//! window capture.
 //!
 //! # Withheld contents
 //!
@@ -51,12 +51,9 @@ use futures::channel::oneshot;
 use futures::future::{self, BoxFuture, FutureExt};
 use objc2::rc::Retained;
 use objc2::AllocAnyThread;
-use objc2_core_foundation::{
-    CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize,
-};
+use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
 use objc2_core_graphics::{
-    kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowOwnerPID, CGBitmapContextCreate, CGColorSpace,
-    CGContext, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
+    kCGColorSpaceSRGB, kCGNullWindowID, kCGWindowOwnerPID, CGImage, CGPreflightScreenCaptureAccess,
     CGWindowListCopyWindowInfo, CGWindowListOption,
 };
 use objc2_foundation::{NSArray, NSError, NSInteger};
@@ -66,6 +63,7 @@ use objc2_screen_capture_kit::{
 };
 use parking_lot::Mutex;
 
+use super::cgimage::image_from_cg;
 use super::displays::MacosDisplays;
 use crate::capture::{Capture, DisplayCapture};
 use crate::displays::Displays;
@@ -438,72 +436,6 @@ fn sck_error(in_sck_domain: bool, code: NSInteger, description: String) -> Error
     }
 }
 
-// ---------------------------------------------------------------------------
-// CGImage → Image
-// ---------------------------------------------------------------------------
-
-/// Draws `image` into a `size` sRGB RGBA8 bitmap and returns it as an [`Image`],
-/// scaling if the sizes differ.
-///
-/// CoreGraphics bitmap contexts only support premultiplied alpha for 8-bit RGBA,
-/// so the pixels are un-premultiplied afterwards ([`unpremultiply`]).
-fn image_from_cg(image: &CGImage, size: PhysicalSize) -> Result<Image> {
-    let width = size.width as usize;
-    let height = size.height as usize;
-    let too_large = || Error::InvalidImage(format!("{}×{} is too large", size.width, size.height));
-    let stride = width.checked_mul(4).ok_or_else(too_large)?;
-    let mut pixels = vec![0; stride.checked_mul(height).ok_or_else(too_large)?];
-    // SAFETY: `kCGColorSpaceSRGB` is an immutable CoreGraphics constant.
-    let srgb = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }))
-        .ok_or_else(|| Error::Platform("the sRGB color space is unavailable".into()))?;
-    // Byte order 32-big with alpha last: memory holds r, g, b, a.
-    let bitmap_info = CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0;
-    {
-        // SAFETY: `pixels` holds `stride × height` bytes and outlives the context,
-        // which is dropped at the end of this block.
-        let context = unsafe {
-            CGBitmapContextCreate(
-                pixels.as_mut_ptr().cast(),
-                width,
-                height,
-                8,
-                stride,
-                Some(&srgb),
-                bitmap_info,
-            )
-        }
-        .ok_or_else(|| {
-            Error::Platform(format!(
-                "could not create a {}×{} bitmap context",
-                size.width, size.height
-            ))
-        })?;
-        let bounds = CGRect::new(CGPoint::ZERO, CGSize::new(width as f64, height as f64));
-        CGContext::draw_image(Some(&context), bounds, Some(image));
-    }
-    unpremultiply(&mut pixels);
-    Image::new(size, pixels)
-}
-
-/// Converts RGBA8 pixels from premultiplied to straight alpha in place, rounding
-/// to nearest. Fully transparent pixels become transparent black; color values
-/// above their alpha (invalid premultiplied data) saturate at 255.
-fn unpremultiply(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
-        let alpha = u16::from(pixel[3]);
-        match alpha {
-            255 => {}
-            0 => pixel[..3].fill(0),
-            _ => {
-                for channel in &mut pixel[..3] {
-                    let straight = (u16::from(*channel) * 255 + alpha / 2) / alpha;
-                    *channel = straight.min(255) as u8;
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use chartreuse_core::color::Rgba8;
@@ -595,98 +527,5 @@ mod tests {
             sck_error(true, SCStreamErrorCode::InternalError.0, "boom".into()),
             Error::Platform(message) if message.contains("boom")
         ));
-    }
-
-    #[test]
-    fn unpremultiply_restores_straight_alpha() {
-        let mut pixels = [
-            10, 20, 30, 255, // opaque: unchanged
-            40, 50, 60, 0, // transparent: becomes transparent black
-            64, 32, 0, 128, // half alpha: doubled (rounded)
-            200, 100, 50, 100, // color above alpha: saturates
-            1, 1, 1, 3, // rounds to nearest: 1 × 255 / 3 = 85
-        ];
-        unpremultiply(&mut pixels);
-        assert_eq!(
-            pixels,
-            [
-                10, 20, 30, 255, //
-                0, 0, 0, 0, //
-                128, 64, 0, 128, //
-                255, 255, 128, 100, //
-                85, 85, 85, 3,
-            ]
-        );
-    }
-
-    #[test]
-    fn unpremultiply_round_trips_premultiplied_colors() {
-        for alpha in 1..=255u16 {
-            for straight in [0u16, 1, 77, 128, 254, 255] {
-                let premultiplied = (straight * alpha + 127) / 255;
-                let mut pixel = [premultiplied as u8, 0, 0, alpha as u8];
-                unpremultiply(&mut pixel);
-                let restored = u16::from(pixel[0]);
-                // Premultiplying loses precision at low alpha; the round trip is
-                // within one premultiplied step.
-                let tolerance = 255 / alpha / 2 + 1;
-                assert!(
-                    restored.abs_diff(straight) <= tolerance,
-                    "alpha {alpha}: {straight} → {premultiplied} → {restored}"
-                );
-            }
-        }
-    }
-
-    /// A 2×2 sRGB `CGImage` from premultiplied RGBA bytes, top row first.
-    fn cg_image(premultiplied: [u8; 16]) -> CFRetained<CGImage> {
-        use objc2_core_graphics::{
-            CGBitmapContextCreateImage, CGBitmapContextGetBytesPerRow, CGBitmapContextGetData,
-        };
-
-        // SAFETY: `kCGColorSpaceSRGB` is an immutable CoreGraphics constant.
-        let srgb = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })).unwrap();
-        // SAFETY: a null buffer makes CoreGraphics allocate and own the memory, so
-        // the image made from the context stays valid on its own.
-        let context = unsafe {
-            CGBitmapContextCreate(
-                std::ptr::null_mut(),
-                2,
-                2,
-                8,
-                0,
-                Some(&srgb),
-                CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0,
-            )
-        }
-        .unwrap();
-        let data = CGBitmapContextGetData(Some(&context)).cast::<u8>();
-        let stride = CGBitmapContextGetBytesPerRow(Some(&context));
-        for (row, bytes) in premultiplied.chunks_exact(8).enumerate() {
-            // SAFETY: the context's buffer has 2 rows of `stride` ≥ 8 bytes.
-            unsafe {
-                data.add(row * stride)
-                    .copy_from_nonoverlapping(bytes.as_ptr(), 8)
-            };
-        }
-        CGBitmapContextCreateImage(Some(&context)).unwrap()
-    }
-
-    #[test]
-    fn cg_images_convert_to_straight_rgba_top_row_first() {
-        let source = cg_image([
-            255, 0, 0, 255, /**/ 0, 255, 0, 255, // top: red, green
-            0, 0, 255, 255, /**/ 128, 128, 128,
-            128, // bottom: blue, half-transparent white
-        ]);
-        let image = image_from_cg(&source, size(2, 2)).unwrap();
-        assert_eq!(image.size(), size(2, 2));
-        assert_eq!(
-            image.pixels(),
-            [
-                255, 0, 0, 255, /**/ 0, 255, 0, 255, //
-                0, 0, 255, 255, /**/ 255, 255, 255, 128,
-            ]
-        );
     }
 }
