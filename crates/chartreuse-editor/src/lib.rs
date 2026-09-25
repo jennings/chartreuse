@@ -4,5 +4,6 @@
 
 pub mod canvas;
 pub mod flatten;
+pub mod font;
 pub mod model;
 pub mod tools;
