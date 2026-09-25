@@ -74,13 +74,15 @@ cargo xtask run
 ```
 
 This builds `target/debug/Chartreuse Dev.app`, signs it, and launches it with `open`,
-with the app's logs on your terminal. Until the status item lands, the app shows a
-placeholder window; closing it (or its Quit button) quits the app. Set `RUST_LOG`
-(for example `RUST_LOG=debug`) to change the log level.
+with the app's logs on your terminal. The app opens no windows at startup: it lives
+in the menu bar, and the status item's Quit quits it. Set `RUST_LOG` (for example
+`RUST_LOG=debug`) to change the log level.
 
 `cargo xtask run --fake` (or `CHARTREUSE_BACKEND=fake cargo xtask run`) swaps in the
 synthetic platform backend (fake displays, windows, and captures) for UI work without
-real capture. It calls no macOS privacy API, so it never makes macOS prompt.
+real capture. It calls no macOS privacy API, so it never makes macOS prompt. The fake
+status item is not a real menu bar icon, so quit that build with
+`pkill -f 'Chartreuse Dev.app/Contents/MacOS'`.
 
 ### Automated work (AI agents, scripts)
 

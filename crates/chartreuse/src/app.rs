@@ -5,8 +5,9 @@
 //!
 //! Every feature lives in its own module, so parallel work never edits the same
 //! file: `hotkeys`, `tray`, `permission`, `capture`, `overlay`, `editor`,
-//! `settings`, `import`, `export`, plus the shared `alert` (user notices) and the
-//! Stage 0 `placeholder` window. Each module exports:
+//! `settings`, `import`, `export`, plus the shared `alert` (user notices). The
+//! daemon starts with no windows; the status item is the app's only UI until a
+//! feature opens a window. Each module exports:
 //!
 //! - `State`: its part of the app state, a field of [`App`] named after the module.
 //! - `Message`: its messages, wrapped in the [`Message`] variant named after the
@@ -43,8 +44,7 @@ use iced::{window, Element, Subscription, Task, Theme};
 
 use crate::windows::{WindowKind, WindowRegistry};
 use crate::{
-    alert, capture, editor, export, hotkeys, import, overlay, permission, placeholder, settings,
-    theme, tray,
+    alert, capture, editor, export, hotkeys, import, overlay, permission, settings, theme, tray,
 };
 
 /// Selects the platform backend: `fake` for the synthetic backend, anything else
@@ -58,7 +58,6 @@ pub struct App {
     pub windows: WindowRegistry,
     pub theme: Theme,
     pub alert: alert::State,
-    pub placeholder: placeholder::State,
     pub hotkeys: hotkeys::State,
     pub tray: tray::State,
     pub permission: permission::State,
@@ -83,7 +82,6 @@ pub enum Message {
     Import(import::Message),
     Export(export::Message),
     Alert(alert::Message),
-    Placeholder(placeholder::Message),
     /// A window closed (by the user or by `window::close`).
     WindowClosed(window::Id),
 }
@@ -95,7 +93,6 @@ impl App {
             windows: WindowRegistry::default(),
             theme: theme::theme(flavor::ACCENT),
             alert: alert::State::default(),
-            placeholder: placeholder::State::default(),
             hotkeys: hotkeys::State::default(),
             tray: tray::State::default(),
             permission: permission::State::default(),
@@ -119,7 +116,7 @@ impl App {
             _ => chartreuse_platform::current(),
         };
         let mut app = Self::new(platform);
-        let boots: [fn(&mut Self) -> Task<Message>; 11] = [
+        let boots: [fn(&mut Self) -> Task<Message>; 10] = [
             permission::boot,
             tray::boot,
             hotkeys::boot,
@@ -130,7 +127,6 @@ impl App {
             import::boot,
             export::boot,
             alert::boot,
-            placeholder::boot,
         ];
         let tasks: Vec<Task<Message>> = boots.into_iter().map(|boot| boot(&mut app)).collect();
         (app, Task::batch(tasks))
@@ -148,7 +144,6 @@ impl App {
             Message::Import(message) => import::update(self, message),
             Message::Export(message) => export::update(self, message),
             Message::Alert(message) => alert::update(self, message),
-            Message::Placeholder(message) => placeholder::update(self, message),
             Message::WindowClosed(id) => self.window_closed(id),
         }
     }
@@ -164,7 +159,6 @@ impl App {
             WindowKind::Settings => settings::window_closed(self, id),
             WindowKind::Alert => alert::window_closed(self, id),
             WindowKind::Permission => permission::window_closed(self, id),
-            WindowKind::Placeholder => placeholder::window_closed(self, id),
         }
     }
 
@@ -175,7 +169,6 @@ impl App {
             Some(WindowKind::Settings) => settings::view(self, id),
             Some(WindowKind::Alert) => alert::view(self, id),
             Some(WindowKind::Permission) => permission::view(self, id),
-            Some(WindowKind::Placeholder) => placeholder::view(self, id),
             // Not ours, or already closed.
             None => space().into(),
         }
@@ -204,7 +197,6 @@ impl App {
             import::subscription(self),
             export::subscription(self),
             alert::subscription(self),
-            placeholder::subscription(self),
         ])
     }
 }

@@ -91,8 +91,10 @@ pub fn launch(fake: bool) -> Result {
     let env = app_env(fake, |name| std::env::var(name).ok());
     if fake {
         eprintln!("using the fake platform backend: no real capture, no privacy prompts");
+        eprintln!("launching; quit with `pkill -f 'Chartreuse Dev.app/Contents/MacOS'` to return");
+    } else {
+        eprintln!("launching; quit the app (Quit in its menu bar menu) to return");
     }
-    eprintln!("launching; quit the app (or close its placeholder window) to return");
     match terminal() {
         Some(tty) => run(tool("open").args(open_args(&layout.app, &tty, &env))),
         None => launch_with_log_file(&layout.app, &env),

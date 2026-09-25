@@ -16,7 +16,6 @@ pub mod hotkeys;
 pub mod import;
 pub mod overlay;
 pub mod permission;
-pub mod placeholder;
 pub mod settings;
 pub mod theme;
 pub mod tray;

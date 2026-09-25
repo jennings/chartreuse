@@ -19,8 +19,6 @@ pub enum WindowKind {
     Alert,
     /// Screen Recording permission guidance (`permission`).
     Permission,
-    /// The Stage 0 placeholder window (`placeholder`).
-    Placeholder,
 }
 
 impl WindowKind {
@@ -29,7 +27,7 @@ impl WindowKind {
     pub fn title(self) -> String {
         let name = flavor::DISPLAY_NAME;
         match self {
-            Self::Overlay | Self::Alert | Self::Placeholder => name.to_owned(),
+            Self::Overlay | Self::Alert => name.to_owned(),
             Self::Editor => format!("{name} Editor"),
             Self::Settings => format!("{name} Settings"),
             Self::Permission => format!("{name} Needs Screen Recording"),
