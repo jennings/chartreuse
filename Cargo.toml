@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+default-members = ["crates/chartreuse"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+repository = "https://github.com/jennings/chartreuse"
+publish = false
+
+[workspace.dependencies]
+# Shared dependencies only. A third-party dependency used by a single crate is
+# declared directly in that crate's Cargo.toml, with its version and features;
+# move it here once a second crate needs it. That keeps a track's new
+# dependencies inside the crate it owns. On a Cargo.lock conflict, take main's
+# copy and re-run cargo to regenerate it.
+
+# Workspace crates.
+chartreuse-config = { path = "crates/chartreuse-config" }
+chartreuse-core = { path = "crates/chartreuse-core" }
+chartreuse-editor = { path = "crates/chartreuse-editor" }
+chartreuse-imaging = { path = "crates/chartreuse-imaging" }
+chartreuse-overlay = { path = "crates/chartreuse-overlay" }
+chartreuse-platform = { path = "crates/chartreuse-platform" }
+
+# GUI. Pinned: iced's API changes between minor releases.
+iced = { version = "=0.14.0", features = ["canvas", "image", "advanced"] }
+
+# Async plumbing shared by the platform traits and the app.
+futures = "0.3.34"
+
+# Logging.
+tracing = "0.1.44"
+
+# macOS bindings: the objc2 family, used by every macOS track (kept here, even
+# while only chartreuse-platform uses it, so that all macOS code shares one set
+# of bindings). Declared with all framework features enabled so tracks never
+# need to edit a Cargo.toml to reach a new class. Carbon (HIToolbox hotkeys) has
+# no objc2 bindings; `extern "C"` declarations live next to their use in
+# `chartreuse-platform/src/macos/`.
+objc2 = "0.6.4"
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+objc2-foundation = "0.3.2"
+objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
+objc2-screen-capture-kit = "0.3.2"
+objc2-uniform-type-identifiers = "0.3.2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_qualifications = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+undocumented_unsafe_blocks = "warn"
