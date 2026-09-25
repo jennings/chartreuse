@@ -1,16 +1,4 @@
-//! The select tool: pick, move, and reshape annotations, and double-click text
-//! to edit it.
-//!
-//! - A click selects the topmost annotation under the pointer
-//!   ([`Document::annotation_at`]) and nothing else; a click on nothing clears
-//!   the selection. Shift-click adds or removes one annotation.
-//! - Dragging a selected annotation moves the whole selection (dragging an
-//!   unselected one selects it first). The move is previewed and recorded as
-//!   one [`Command::Translate`] on release.
-//! - Dragging a handle of a lone selected annotation reshapes it (see
-//!   [`handles`](super::handles)).
-//! - Double-clicking text edits it in place (see [`text`](super::text)); a
-//!   click elsewhere commits the edit and then acts as a normal click.
+//! The select tool.
 
 use iced::mouse::Interaction;
 
@@ -19,7 +7,20 @@ use super::text::{text_at, TextEdit};
 use super::{Context, Pointer, Preview, Tool, ToolKind};
 use crate::model::{AnnotationId, Command, Document, Point, Vector};
 
-/// The select tool.
+/// The select tool: pick, move, and reshape annotations, and double-click
+/// text to edit it.
+///
+/// - A click selects the topmost annotation under the pointer
+///   ([`Document::annotation_at`]) and nothing else; a click on nothing
+///   clears the selection. Shift-click adds or removes one annotation.
+/// - Dragging a selected annotation moves the whole selection (dragging an
+///   unselected one selects it first). The move is previewed and recorded as
+///   one [`Command::Translate`] on release.
+/// - Dragging a [handle](super::Handle) of a lone selected annotation
+///   reshapes it as one [`Command::Reshape`], keeping the grab offset; Shift
+///   snaps a line's or arrow's end to 45° or makes a rectangle square.
+/// - Double-clicking text edits it in place (see [`TextTool`](super::TextTool));
+///   a click elsewhere commits the edit and then acts as a normal click.
 #[derive(Debug, Default)]
 pub struct SelectTool {
     state: State,

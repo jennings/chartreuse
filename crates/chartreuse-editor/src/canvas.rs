@@ -21,8 +21,33 @@
 //! Annotations and previews are clipped to the image, as they are when
 //! flattened; selection chrome is not.
 //!
-//! Shapes are drawn as described in [`render::shape`]; the zoom and pan are a
-//! [`View`], mapped to canvas coordinates by a [`Viewport`].
+//! The zoom and pan are a [`View`], mapped to canvas coordinates by a
+//! [`Viewport`].
+//!
+//! # Drawing
+//!
+//! Everything is drawn in canvas pixels through the [`Viewport`]: document
+//! point `p` is at `origin + p × scale`, and document lengths are multiplied
+//! by `scale`. Per annotation, in the annotation's color:
+//!
+//! - Strokes (a line, an arrow's shaft, a rectangle's outline) are
+//!   `stroke_width` wide, centered on the geometry, with round caps and
+//!   round joins. A zero-length stroke is a disc `stroke_width` across.
+//! - An arrow is its shaft stroked from `start` to [`ArrowHead::base`], then
+//!   the head triangle `[tip, left, right]` filled (never stroked).
+//! - A rectangle is the closed outline through [`Rect::corners`].
+//! - Text is iced canvas text: shaped by cosmic-text and rasterized by the
+//!   renderer's glyph cache, in [`font::FONT`], at `font_size` with a line
+//!   height of `font_size × Text::LINE_HEIGHT` (both × `scale`), the layout
+//!   box's top-left corner at the text's `position`, filled with the color
+//!   (straight alpha). At `scale` 1 the layout is exactly [`font::layout`];
+//!   see [`font`](crate::font#layout) for the baseline and fallback rules.
+//!
+//! The base image fills its rectangle, filtered nearest-neighbor at a scale
+//! of 1 or more (so zoomed-in pixels stay crisp) and bilinearly below.
+//!
+//! [`ArrowHead::base`]: crate::model::ArrowHead::base
+//! [`Rect::corners`]: crate::model::Rect::corners
 
 mod render;
 mod viewport;

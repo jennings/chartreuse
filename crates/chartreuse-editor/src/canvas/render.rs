@@ -23,16 +23,8 @@ pub fn color(color: Rgba8) -> Color {
     Color::from_rgba8(color.r, color.g, color.b, f32::from(color.a) / 255.0)
 }
 
-/// Draws `shape` in `style`, mapped onto the canvas by `viewport`.
-///
-/// - Strokes are `stroke_width` wide (scaled with the zoom), with round caps
-///   and joins; a zero-length stroke is a round dot `stroke_width` across.
-/// - An arrow is its shaft stroked from `start` to the head's base, then the
-///   head triangle filled.
-/// - Text is filled with iced's canvas text (cosmic-text, via the renderer's
-///   glyph cache) in [`font::FONT`] at `font_size` × zoom, with a line height
-///   of `font_size × Text::LINE_HEIGHT` × zoom and the layout box's top-left
-///   corner at the text's position; see [`font`](crate::font#layout).
+/// Draws `shape` in `style`, mapped onto the canvas by `viewport`, following
+/// the rules in the [canvas docs](super#drawing).
 pub fn shape(frame: &mut Frame, viewport: &Viewport, shape: &Shape, style: &Style) {
     let paint = color(style.color);
     let width = style.stroke_width.max(0.0) * viewport.scale();

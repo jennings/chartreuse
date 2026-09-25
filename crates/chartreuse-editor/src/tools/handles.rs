@@ -12,7 +12,9 @@ pub const HANDLE_SIZE: f32 = 8.0;
 /// How close to a handle's center a press grabs it, in canvas pixels.
 pub const HANDLE_REACH: f32 = 7.0;
 
-/// A draggable point of an annotation.
+/// A draggable point of a lone selected annotation (see [`handles`]): a
+/// line's or arrow's ends, or a rectangle's corners. Text has none; its size
+/// follows its font size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Handle {
     /// A line's or arrow's `start`.

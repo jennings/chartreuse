@@ -1,14 +1,4 @@
 //! The text tool and in-place text editing.
-//!
-//! Clicking with the text tool opens a [`TextEdit`]: of the text annotation
-//! under the click if there is one, otherwise of a new, empty text whose first
-//! line is centered on the click. While it is open, typing inserts at the end
-//! of the text, Backspace deletes the last character, and Enter starts a new
-//! line. Escape, a click elsewhere, or switching tools commits it as one undo
-//! step: a new text is added (and selected), an existing one gets its new
-//! content ([`Command::EditText`]). Blank text (nothing but whitespace) is
-//! discarded: a new blank text adds nothing, and an existing text edited
-//! down to blank is deleted.
 
 use iced::mouse::Interaction;
 use unicode_segmentation::UnicodeSegmentation;
@@ -39,7 +29,7 @@ pub enum TextTarget {
     Existing(AnnotationId),
 }
 
-/// Text being edited in place (see the [module docs](self)).
+/// Text being edited in place (see [`TextTool`] for the behavior).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextEdit {
     target: TextTarget,
@@ -125,9 +115,11 @@ impl TextEdit {
         self.style = self.style.patched(patch);
     }
 
-    /// Commits the edit to `document` as at most one undo step (see the
-    /// [module docs](self)). Returns the text annotation's id if it exists
-    /// afterwards.
+    /// Commits the edit to `document` as at most one undo step: new text is
+    /// added and selected, existing text gets its new content
+    /// ([`Command::EditText`]), and blank text (nothing but whitespace) is
+    /// discarded, deleting an existing annotation edited down to blank.
+    /// Returns the text annotation's id if it exists afterwards.
     pub fn commit(self, document: &mut Document) -> Option<AnnotationId> {
         let blank = self.is_blank();
         match self.target {
@@ -179,6 +171,13 @@ pub(super) fn open(at: Point, cx: &mut Context<'_>) -> TextEdit {
 }
 
 /// The text tool.
+///
+/// Clicking opens a [`TextEdit`]: of the text annotation under the click if
+/// there is one, otherwise of a new, empty text whose first line is centered
+/// on the click. While it is open, typing inserts at the end of the text,
+/// Backspace deletes the last character, and Enter starts a new line. Escape,
+/// a click elsewhere, or switching tools [commits](TextEdit::commit) it as
+/// one undo step; blank text is discarded.
 #[derive(Debug, Default)]
 pub struct TextTool {
     edit: Option<TextEdit>,

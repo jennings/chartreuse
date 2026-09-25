@@ -4,7 +4,8 @@
 use super::{DragShape, DragTool, ToolKind};
 use crate::model::{self, Point, Rect, Shape, Vector};
 
-/// The rectangle tool.
+/// The rectangle tool: drag from one corner to the opposite one; Shift makes
+/// it a square.
 pub type RectangleTool = DragTool<Rectangle>;
 
 /// The rectangle tool's geometry (see [`DragShape`]).

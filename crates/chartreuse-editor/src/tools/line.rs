@@ -6,7 +6,7 @@ use std::f32::consts::FRAC_1_SQRT_2;
 use super::{DragShape, DragTool, ToolKind};
 use crate::model::{self, Point, Shape, Vector};
 
-/// The line tool.
+/// The line tool: drag from one end to the other; Shift snaps it to 45°.
 pub type LineTool = DragTool<Line>;
 
 /// The line tool's geometry (see [`DragShape`]).

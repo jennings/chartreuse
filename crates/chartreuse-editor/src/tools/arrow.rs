@@ -5,7 +5,7 @@ use super::line::snap_45;
 use super::{DragShape, DragTool, ToolKind};
 use crate::model::{self, Point, Shape};
 
-/// The arrow tool.
+/// The arrow tool: drag from the tail to the tip; Shift snaps it to 45°.
 pub type ArrowTool = DragTool<Arrow>;
 
 /// The arrow tool's geometry (see [`DragShape`]).

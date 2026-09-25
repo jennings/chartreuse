@@ -8,8 +8,9 @@
 //!
 //! [`load`] registers the font with iced's global text system: the one
 //! cosmic-text `FontSystem` that iced's renderers, canvas text, and [`layout`]
-//! all share. It is synchronous and idempotent; call it before drawing
-//! annotation text ([`measure`] and [`caret`] call it themselves). Passing
+//! all share. It is synchronous and idempotent, and
+//! [`Editor::new`](crate::Editor::new) calls it ([`measure`] and [`caret`] do
+//! too), so an app that shows an editor needs no wiring of its own. Passing
 //! [`BYTES`] to `iced::daemon(..).font(..)` as well is harmless: iced skips
 //! bytes it has already loaded.
 //!
