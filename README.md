@@ -78,8 +78,25 @@ with the app's logs on your terminal. Until the status item lands, the app shows
 placeholder window; closing it (or its Quit button) quits the app. Set `RUST_LOG`
 (for example `RUST_LOG=debug`) to change the log level.
 
-`CHARTREUSE_BACKEND=fake cargo xtask run` swaps in the synthetic platform backend
-(fake displays, windows, and captures) for UI work without real capture.
+`cargo xtask run --fake` (or `CHARTREUSE_BACKEND=fake cargo xtask run`) swaps in the
+synthetic platform backend (fake displays, windows, and captures) for UI work without
+real capture. It calls no macOS privacy API, so it never makes macOS prompt.
+
+### Automated work (AI agents, scripts)
+
+Unattended work must not put a Screen Recording prompt in front of the person at
+the Mac:
+
+- `cargo xtask check`, `cargo test`, and `cargo xtask bundle` never prompt. Tests only
+  read the permission status, and macOS attributes them to the terminal.
+- Launch the app with `cargo xtask run --fake`.
+- Plain `cargo xtask run` (the real backend, for example to try hotkeys or the status
+  item) does not prompt from an ad-hoc build. A `dev-cert` build asks macOS once
+  per identity: leave that first launch, and its answer, to the person (step 2).
+- Examples that capture (`cargo run -p chartreuse-platform --example
+  capture_displays`) and `screencapture` run as the terminal app, so macOS asks on
+  the terminal's behalf if it lacks Screen Recording.
+- Never run `tccutil reset`.
 
 ### Troubleshooting
 
@@ -103,7 +120,7 @@ Everything beyond `cargo build` is a `cargo xtask` command, and CI runs nothing 
 |---|---|
 | `cargo xtask check` | `cargo fmt --check`, `cargo clippy` with warnings denied, `cargo test` |
 | `cargo xtask bundle` | Signed `target/debug/Chartreuse Dev.app` (macOS) |
-| `cargo xtask run` | `bundle`, then launch it through LaunchServices |
+| `cargo xtask run` | `bundle`, then launch it through LaunchServices. `--fake` uses the synthetic platform backend |
 | `cargo xtask dev-cert` | Once per machine (macOS): create the self-signed development signing identity that `bundle` uses when `CHARTREUSE_SIGN_IDENTITY` is unset |
 | `cargo xtask release` | Release build for the host platform. macOS: `Chartreuse.app` signed with `CHARTREUSE_RELEASE_SIGN_IDENTITY` (a Developer ID Application identity), zipped into `target/dist/`. `--allow-ad-hoc` signs ad-hoc instead, for a local build that cannot be distributed. |
 

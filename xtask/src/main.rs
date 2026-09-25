@@ -24,6 +24,8 @@ Commands:
             $CHARTREUSE_SIGN_IDENTITY, else the dev-cert identity, else ad-hoc
             with a warning
   run       bundle, then launch the app with `open`, its output on this terminal
+            --fake  use the synthetic platform backend: no real capture, and no
+                    macOS privacy prompts (use this for automated work)
   dev-cert  create a self-signed development signing identity in its own
             keychain (macOS, once per machine), so the Screen Recording
             permission survives rebuilds
@@ -42,7 +44,8 @@ fn main() -> ExitCode {
     {
         ["check"] => check::check(),
         ["bundle"] => bundle::Bundle::development().and_then(|b| b.build().map(drop)),
-        ["run"] => launch::launch(),
+        ["run"] => launch::launch(false),
+        ["run", "--fake"] => launch::launch(true),
         ["dev-cert"] => dev_cert::dev_cert(),
         ["release"] => release::release(false),
         ["release", "--allow-ad-hoc"] => release::release(true),
