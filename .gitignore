@@ -1,0 +1,23 @@
+# Cargo build output, including bundled .app, .dmg, and other xtask artifacts.
+# Cargo.lock is committed: this workspace ships a binary.
+/target/
+
+# rustfmt backups
+**/*.rs.bk
+
+# Signing and notarization secrets. Credentials come from the environment,
+# never from the repository.
+*.p12
+*.p8
+*.cer
+*.keychain
+*.keychain-db
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# draw.io backup and temp files (Docs/*.drawio.svg)
+.$*.bkp
+.$*.dtmp

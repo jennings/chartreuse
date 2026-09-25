@@ -57,7 +57,7 @@ place, so that Stage 1 agents can work without editing each other's code.
         iced), `[workspace.lints]`, edition, `rust-toolchain.toml`
   - [ ] Choose the macOS bindings (e.g. the `objc2` family) and add them as workspace
         dependencies, so that every macOS track uses the same bindings
-  - [ ] `.gitignore` for `target/`
+  - [x] `.gitignore` for `target/`
   - [ ] Create these crates as compiling stubs:
     - [ ] `crates/chartreuse`: binary; iced daemon and app core
     - [ ] `crates/chartreuse-core`: shared types and pure logic
