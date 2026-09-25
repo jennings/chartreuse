@@ -7,6 +7,7 @@ mod bundle;
 mod check;
 mod icon;
 mod info_plist;
+mod launch;
 mod sign;
 mod util;
 
@@ -19,6 +20,7 @@ Commands:
   check     cargo fmt --check, cargo clippy (warnings denied), cargo test
   bundle    build and sign target/debug/Chartreuse Dev.app (macOS); signs with
             $CHARTREUSE_SIGN_IDENTITY, or ad-hoc with a warning when unset
+  run       bundle, then launch the app with `open`, its output on this terminal
 ";
 
 fn main() -> ExitCode {
@@ -31,6 +33,7 @@ fn main() -> ExitCode {
     {
         ["check"] => check::check(),
         ["bundle"] => bundle::Bundle::development().build().map(drop),
+        ["run"] => launch::launch(),
         [] | ["help" | "--help" | "-h"] => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

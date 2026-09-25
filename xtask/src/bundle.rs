@@ -83,9 +83,8 @@ impl Bundle {
         }
     }
 
-    /// Builds the executable, assembles the bundle, and signs it. Returns the
-    /// `.app` path.
-    pub fn build(&self) -> Result<PathBuf> {
+    /// Builds the executable, assembles the bundle, and signs it.
+    pub fn build(&self) -> Result<Layout> {
         if !cfg!(target_os = "macos") {
             return Err(Error("app bundles can only be built on macOS".into()));
         }
@@ -109,7 +108,7 @@ impl Bundle {
             self.identity_env,
         )?;
         eprintln!("bundled {}", layout.app.display());
-        Ok(layout.app)
+        Ok(layout)
     }
 
     fn assemble(&self, profile_dir: &Path, layout: &Layout) -> Result {
