@@ -4,10 +4,11 @@
 //! # Startup
 //!
 //! `boot` schedules [`Message::CheckAtStartup`]. If the permission is missing, it
-//! asks macOS to prompt ([`Permissions::request`]); macOS prompts only once per
-//! app, so on later launches this just reports the status. If the permission is
-//! still missing, the guidance window opens without taking focus, so it does not
-//! cover the system prompt.
+//! asks macOS to prompt ([`Permissions::request`]). macOS prompts once per signing
+//! identity, so on later launches this just reports the status; the macOS backend
+//! does not ask at all from ad-hoc signed builds, which have no stable identity.
+//! If the permission is still missing, the guidance window opens without taking
+//! focus, so it does not cover the system prompt.
 //!
 //! # Before each capture
 //!
