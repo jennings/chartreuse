@@ -207,12 +207,12 @@ Owns: `chartreuse-config`
 
 Owns: `chartreuse-editor::model`
 
-- [ ] `Document`: base image, an ordered list of annotations, and the selection
-- [ ] Annotation types for the M4 set (line, arrow, rectangle, text), extensible for 3B
-- [ ] Style: color, stroke width, font size
-- [ ] Command-based undo/redo that covers add, move, restyle, delete, and reorder
-- [ ] Hit-testing geometry for each annotation type
-- [ ] Unit tests
+- [x] `Document`: base image, an ordered list of annotations, and the selection
+- [x] Annotation types for the M4 set (line, arrow, rectangle, text), extensible for 3B
+- [x] Style: color, stroke width, font size
+- [x] Command-based undo/redo that covers add, move, restyle, delete, and reorder
+- [x] Hit-testing geometry for each annotation type
+- [x] Unit tests
 
 **Gate:** Stage 1 tracks are merged as each finishes. Each Stage 2 track may start as
 soon as its own dependencies have landed.
