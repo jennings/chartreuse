@@ -155,11 +155,11 @@ Owns: `chartreuse-platform/src/macos/status_item.rs`, `crates/chartreuse/src/tra
 
 Owns: `chartreuse-platform/src/macos/hotkeys.rs`, `crates/chartreuse/src/hotkeys.rs`
 
-- [ ] Carbon `RegisterEventHotKey` / unregister behind the `Hotkeys` trait
-- [ ] Deliver hotkey events as a `Subscription`
-- [ ] Support re-registration with a new set of hotkeys (used later by settings)
-- [ ] Report registration failures through `report_error`
-- [ ] One hardcoded hotkey for M1 that logs when pressed
+- [x] Carbon `RegisterEventHotKey` / unregister behind the `Hotkeys` trait
+- [x] Deliver hotkey events as a `Subscription`
+- [x] Support re-registration with a new set of hotkeys (used later by settings)
+- [x] Report registration failures through `report_error`
+- [x] One hardcoded hotkey for M1 that logs when pressed
 
 ### 1C — Screen Recording permission (macOS)
 
