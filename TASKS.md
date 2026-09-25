@@ -303,10 +303,10 @@ Depends on: 1D; the window capture decisions for the capture half. Owns:
 `chartreuse-platform/src/macos/window_list.rs`, window capture in
 `chartreuse-platform/src/macos/capture.rs` (coordinate with 2A)
 
-- [ ] Window list with bounds, z-order, and owner (`SCShareableContent`, plus
+- [x] Window list with bounds, z-order, and owner (`SCShareableContent`, plus
       `CGWindowListCopyWindowInfo` if needed), excluding Chartreuse's own windows
-- [ ] Find the topmost window at a global point
-- [ ] Single-window capture with `SCContentFilter`, following the decisions
+- [x] Find the topmost window at a global point
+- [x] Single-window capture with `SCContentFilter`, following the decisions
 
 ### 2H — Window selection canvas
 
