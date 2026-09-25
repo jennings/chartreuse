@@ -9,6 +9,23 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+chartreuse-config.workspace = true
+chartreuse-core.workspace = true
+chartreuse-editor.workspace = true
+chartreuse-imaging.workspace = true
+chartreuse-overlay.workspace = true
+chartreuse-platform.workspace = true
+iced.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+futures.workspace = true
+
+[features]
+# Build the release flavor (see `chartreuse_core::flavor`). Set by
+# `cargo xtask release` only.
+release-flavor = ["chartreuse-core/release-flavor"]
 
 [lints]
 workspace = true

@@ -1,3 +1,5 @@
-//! Chartreuse: a screenshot and annotation tool.
+//! The `chartreuse` executable. Everything lives in the library crate.
 
-fn main() {}
+fn main() -> iced::Result {
+    chartreuse::run()
+}
