@@ -12,6 +12,7 @@
 //!   edit the same file. Each file exports one type with an infallible `new()`;
 //!   the directory's `mod.rs` assembles them into a [`Platform`] and never needs
 //!   to change.
+//! - [`fake`]: a synthetic backend for tests and UI work.
 //!
 //! Backends that are not implemented yet fail every call with
 //! [`Error::Unsupported`](chartreuse_core::Error::Unsupported), so every target
@@ -66,6 +67,7 @@ pub mod clipboard;
 pub mod dialogs;
 pub mod displays;
 pub mod event;
+pub mod fake;
 pub mod hotkeys;
 pub mod overlay_style;
 pub mod permissions;
