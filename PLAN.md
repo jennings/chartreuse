@@ -184,8 +184,8 @@ flowchart LR
 3. For *capture display*, go straight to the editor.
 4. For rectangle or window mode, open an overlay window on each display showing the
    frozen capture.
-5. On commit, crop the frozen capture to the selection (or capture the chosen window
-   directly; see [Open questions](#open-questions)) and open the editor.
+5. On commit, crop the frozen capture to the selection (rectangle mode) or capture the
+   chosen window directly (window mode; see [Decisions](#decisions)) and open the editor.
 
 Capturing first and selecting second keeps behavior consistent across platforms and
 fits the Wayland model, where the compositor hands the application a finished image.
@@ -342,11 +342,11 @@ our needs.
 
 ### Identities
 
-Bundle identifiers below are placeholders until a reverse-DNS namespace is chosen.
+Bundle identifiers use the `io.jennings` reverse-DNS namespace.
 
 | | Development | Release |
 |---|---|---|
-| Bundle identifier | `io.github.jennings.chartreuse.dev` | `io.github.jennings.chartreuse` |
+| Bundle identifier | `io.jennings.chartreuse.dev` | `io.jennings.chartreuse` |
 | Display name | Chartreuse Dev | Chartreuse |
 | Certificate | **Apple Development** (free with an Apple ID via Xcode's personal team), or a **self-signed code-signing certificate** created with Keychain Access's Certificate Assistant | **Developer ID Application** (requires the paid Apple Developer Program) |
 | Hardened runtime | On, for parity with release | Required for notarization |
@@ -460,15 +460,20 @@ macOS first; other platforms follow once the core flows are proven.
     [macOS code signing](#macos-code-signing)), Windows installer, Linux packages
     (Flatpak is a natural fit given the portal dependency).
 
-## Open questions
+## Decisions
 
-- **Window capture source:** crop the window out of the frozen display capture (exactly
-  what the user saw, including overlapping windows), or capture the window directly
-  (clean content, even when partially covered)? Possibly a setting.
-- **Window shadows and rounded corners:** include the system shadow / transparent
-  corners (macOS) or capture the rectangular content only?
-- **Launch at login:** `SMAppService` (macOS), `Run` registry key (Windows), XDG
-  autostart (Linux). Likely wanted, not yet scheduled.
-- **Additional export targets:** e.g. save-as format choice (PNG vs. JPEG vs. WebP),
-  copy file path, pin a capture as a floating window.
-- **Multiple captures:** one editor at a time, or one editor window per capture?
+Formerly open questions, now decided:
+
+- **Bundle identifier namespace:** `io.jennings` (`io.jennings.chartreuse` for release,
+  `io.jennings.chartreuse.dev` for development).
+- **Multiple captures:** one editor window per capture. Each capture or import opens its
+  own editor window.
+- **Window capture source:** capture the window directly (clean content, even when
+  partially covered), not cropped from the frozen display capture.
+- **Window shadows and rounded corners:** included — the system shadow and transparent
+  corners are part of a window capture (macOS).
+- **Launch at login:** in scope for v1 — `SMAppService` (macOS), `Run` registry key
+  (Windows), XDG autostart (Linux), toggled in settings.
+- **Additional export targets:** v1 adds a save-as format choice (PNG, JPEG, WebP).
+  Copying the file path and pinning a capture as a floating window are out of scope for
+  v1.

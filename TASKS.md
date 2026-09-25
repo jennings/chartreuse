@@ -36,16 +36,17 @@ These are PLAN.md's open questions, plus choices that are needed before certain 
 start. Each decision is made by a human and recorded in PLAN.md. The tasks it blocks
 cannot start until it is made.
 
-- [ ] Reverse-DNS namespace for the bundle identifiers. Blocks: 5A (release signing).
-      Until then, development uses the placeholder `io.github.jennings.chartreuse.dev`.
-- [ ] Multiple captures: one editor at a time, or one editor window per capture? Blocks:
-      I4 (editor integration).
-- [ ] Window capture source: crop from the frozen capture, capture the window directly, or
-      offer a setting? Blocks: 2G window capture, I5.
-- [ ] Window shadows and rounded corners: include them or not? Blocks: 2G window capture.
-- [ ] Launch at login: in scope for v1? Blocks: 3C.
-- [ ] Additional export targets: format choice (PNG/JPEG/WebP), copy file path, pinned
-      floating capture. Blocks: 3D.
+- [x] Reverse-DNS namespace for the bundle identifiers. Blocks: 5A (release signing).
+      Decided: `io.jennings` (`io.jennings.chartreuse`, `io.jennings.chartreuse.dev`).
+- [x] Multiple captures: one editor at a time, or one editor window per capture? Blocks:
+      I4 (editor integration). Decided: one editor window per capture.
+- [x] Window capture source: crop from the frozen capture, capture the window directly, or
+      offer a setting? Blocks: 2G window capture, I5. Decided: capture directly.
+- [x] Window shadows and rounded corners: include them or not? Blocks: 2G window capture.
+      Decided: include them.
+- [x] Launch at login: in scope for v1? Blocks: 3C. Decided: yes.
+- [x] Additional export targets: format choice (PNG/JPEG/WebP), copy file path, pinned
+      floating capture. Blocks: 3D. Decided: format choice only.
 
 ## Stage 0 — Scaffolding (sequential, one agent)
 
