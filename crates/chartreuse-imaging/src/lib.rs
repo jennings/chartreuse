@@ -8,11 +8,14 @@
 //! - [`composite`]: combine per-display captures into one image on a
 //!   [`PixelGrid`](chartreuse_core::display::PixelGrid) of the desktop or of a
 //!   selection.
+//! - [`kernels`]: pixelate and blur a region, for redaction.
 
 pub mod codec;
 pub mod composite;
+pub mod kernels;
 pub mod region;
 
 pub use codec::{decode, decode_file, encode, Format};
 pub use composite::{composite_at, Composite};
+pub use kernels::{blur, pixelate};
 pub use region::{copy_region, crop};
