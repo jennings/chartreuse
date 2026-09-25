@@ -136,7 +136,7 @@ place, so that Stage 1 agents can work without editing each other's code.
 
 **Gate:** everything above is merged. From here on, agents work in parallel.
 
-## Stage 1 — Foundations (parallel, up to 7 tracks)
+## Stage 1 — Foundations (parallel, up to 8 tracks)
 
 All tracks depend only on Stage 0. Together, 1A, 1B, and 1C complete M1.
 
@@ -213,6 +213,24 @@ Owns: `chartreuse-editor::model`
 - [x] Command-based undo/redo that covers add, move, restyle, delete, and reorder
 - [x] Hit-testing geometry for each annotation type
 - [x] Unit tests
+
+### 1H — Release assets workflow
+
+Depends on: Stage 0. Owns: `.github/workflows/` release workflows and any xtask command
+they need (for example an upload command). 5A, 5B, and 5C later extend what each
+platform's `cargo xtask release` produces; this track makes sure it reaches users.
+
+- [ ] A workflow triggered when a GitHub release is **created** (`release: types:
+      [created]`, not `published`)
+- [ ] A job per supported platform (macOS, Windows, Linux) that runs `cargo xtask release`
+      for the release's tag, so every platform's release build comes from one source
+- [ ] Attach every platform's release output to the triggering release as downloadable
+      assets, through an xtask command (e.g. `cargo xtask upload-release <tag>`) so the
+      workflow keeps no logic of its own
+- [ ] Platforms whose release packaging isn't done yet still attach a usable build (e.g.
+      an ad-hoc signed macOS app until 5A, a zipped binary for Windows and Linux until 5B
+      and 5C), named so users can tell platform and architecture apart
+- [ ] Document cutting a release through GitHub in the README
 
 **Gate:** Stage 1 tracks are merged as each finishes. Each Stage 2 track may start as
 soon as its own dependencies have landed.
@@ -422,7 +440,8 @@ workflow keeps running only `cargo xtask` commands.
 ### 5A — macOS release
 
 Depends on: the bundle identifier decision, Stage 3. Owns: the macOS part of the
-`release` xtask command, `cargo xtask ci-keychain`, and the CI release workflow.
+`release` xtask command, `cargo xtask ci-keychain`, and the macOS signing credentials in
+the release workflows (1H owns the workflows themselves).
 
 - [ ] Universal binary with `lipo` (`aarch64` + `x86_64`)
 - [ ] Release `Info.plist` and entitlements file
