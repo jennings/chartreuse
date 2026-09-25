@@ -13,4 +13,4 @@ pub mod font;
 pub mod model;
 pub mod tools;
 
-pub use editor::{Editor, Event, Message};
+pub use editor::{Editor, Event, Message, ZoomChange};

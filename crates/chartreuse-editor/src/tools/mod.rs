@@ -88,6 +88,30 @@ impl ToolKind {
         }
     }
 
+    /// The key that switches to this tool (lowercase).
+    #[must_use]
+    pub const fn hotkey(self) -> char {
+        match self {
+            Self::Select => 'v',
+            Self::Line => 'l',
+            Self::Arrow => 'a',
+            Self::Rectangle => 'r',
+            Self::Text => 't',
+        }
+    }
+
+    /// The tool whose [hotkey](Self::hotkey) `key` is, in either case.
+    #[must_use]
+    pub fn from_hotkey(key: &str) -> Option<Self> {
+        let mut chars = key.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return None;
+        };
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.hotkey() == c.to_ascii_lowercase())
+    }
+
     /// A new tool of this kind, with nothing in progress.
     #[must_use]
     pub fn create(self) -> Box<dyn Tool> {
@@ -170,8 +194,9 @@ pub trait Tool: fmt::Debug {
     /// Handles a pointer event.
     fn pointer(&mut self, pointer: Pointer, cx: &mut Context<'_>);
 
-    /// Handles the Escape key: abandons the gesture in progress, leaving the
-    /// document untouched. Returns whether there was one.
+    /// Handles the Escape key: abandons a drag in progress, leaving the
+    /// document untouched, or commits an open text edit. Returns whether
+    /// anything was in progress.
     fn escape(&mut self, cx: &mut Context<'_>) -> bool;
 
     /// Completes the gesture in progress as if the user had finished it, for

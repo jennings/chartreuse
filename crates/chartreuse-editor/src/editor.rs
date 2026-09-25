@@ -5,7 +5,7 @@ use chartreuse_core::image::Image;
 use iced::widget::image;
 use iced::{keyboard, Element};
 
-use crate::canvas::{self, Input, InputKind, View, Viewport, Zoom};
+use crate::canvas::{self, Input, InputKind, View, Viewport, Zoom, ZOOM_STEP};
 use crate::font;
 use crate::model::{Command, Document, Shape, Size, Style};
 use crate::tools::{Context, Pointer, TextInput, Tool, ToolKind};
@@ -21,11 +21,36 @@ pub enum Message {
     Canvas(Input),
     /// Switches to a tool, first finishing whatever the current one was doing.
     Tool(ToolKind),
+    Undo,
+    Redo,
+    /// Deletes the selected annotations.
+    Delete,
+    Zoom(ZoomChange),
+}
+
+/// A zoom command, applied around the canvas's center.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ZoomChange {
+    /// Magnify by [`ZOOM_STEP`].
+    In,
+    /// Shrink by [`ZOOM_STEP`].
+    Out,
+    /// [`Zoom::Fit`].
+    Fit,
+    /// One canvas pixel per image pixel.
+    ActualSize,
 }
 
 /// Something the editor asks its owner to do, returned by [`Editor::update`].
+/// Before returning one, the editor [finishes](Editor::finish) any gesture or
+/// text edit in progress, so [`Editor::document`] is complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Event {}
+pub enum Event {
+    /// Save the image to a file (Cmd+S).
+    Save,
+    /// Copy the image to the clipboard (Cmd+C).
+    Copy,
+}
 
 /// The state of one editor: the [`Document`], the active tool, the style for
 /// new annotations, and the zoom and pan.
@@ -94,12 +119,39 @@ impl Editor {
 
     /// Handles a message from [`view`](Self::view).
     pub fn update(&mut self, message: Message) -> Option<Event> {
-        match message {
+        let event = match message {
             Message::Canvas(input) => self.canvas_input(input),
-            Message::Tool(kind) => self.set_tool(kind),
-        }
+            Message::Tool(kind) => {
+                self.set_tool(kind);
+                None
+            }
+            Message::Undo => {
+                self.undo();
+                None
+            }
+            Message::Redo => {
+                self.redo();
+                None
+            }
+            Message::Delete => {
+                self.delete_selection();
+                None
+            }
+            Message::Zoom(change) => {
+                self.zoom_by(change);
+                None
+            }
+        };
         self.measure_text();
-        None
+        event
+    }
+
+    /// Completes whatever the active tool is doing (a drag, a text edit) as
+    /// if the user had finished it, so [`document`](Self::document) holds
+    /// everything the user sees. Call it before exporting.
+    pub fn finish(&mut self) {
+        self.with_tool(|tool, cx| tool.finish(cx));
+        self.measure_text();
     }
 
     /// The editor's widgets.
@@ -128,7 +180,7 @@ impl Editor {
         self.document.bounds().size()
     }
 
-    fn canvas_input(&mut self, input: Input) {
+    fn canvas_input(&mut self, input: Input) -> Option<Event> {
         self.canvas = input.size;
         match input.kind {
             InputKind::Resized => {}
@@ -153,7 +205,7 @@ impl Editor {
                 key,
                 modifiers,
                 text,
-            } => self.key(&key, modifiers, text.as_deref()),
+            } => return self.key(&key, modifiers, text.as_deref()),
             InputKind::Modifiers(modifiers) => {
                 self.modifiers = modifiers;
                 // Let a drag in progress pick up Shift without waiting for the
@@ -165,26 +217,98 @@ impl Editor {
                 }
             }
         }
+        None
     }
 
     fn set_tool(&mut self, kind: ToolKind) {
         if kind != self.tool.kind() {
-            self.with_tool(|tool, cx| tool.finish(cx));
+            self.finish();
             self.tool = kind.create();
         }
     }
 
-    /// Handles a key press: typing while a text edit is open; otherwise
-    /// Delete or Backspace deletes the selection.
-    fn key(&mut self, key: &keyboard::Key, modifiers: keyboard::Modifiers, text: Option<&str>) {
+    fn undo(&mut self) {
+        self.finish();
+        self.document.undo();
+    }
+
+    fn redo(&mut self) {
+        self.finish();
+        self.document.redo();
+    }
+
+    fn zoom_by(&mut self, change: ZoomChange) {
+        let center = iced::Point::new(self.canvas.width / 2.0, self.canvas.height / 2.0);
+        let image = self.image_size();
+        match change {
+            ZoomChange::In => self.view.zoom_by(ZOOM_STEP, center, self.canvas, image),
+            ZoomChange::Out => self
+                .view
+                .zoom_by(1.0 / ZOOM_STEP, center, self.canvas, image),
+            ZoomChange::Fit => self.view.zoom_to(Zoom::Fit, center, self.canvas, image),
+            ZoomChange::ActualSize => {
+                self.view
+                    .zoom_to(Zoom::Scale(1.0), center, self.canvas, image);
+            }
+        }
+    }
+
+    /// Handles a key press:
+    ///
+    /// - Cmd+Z undoes and Cmd+Shift+Z redoes; Cmd+S and Cmd+C ask the owner
+    ///   to save or copy; Cmd+0 fits the image, Cmd+1 shows it at actual
+    ///   size, and Cmd+= and Cmd+- zoom in and out. These work while typing.
+    /// - While a text edit is open, other keys type (see [`Self::type_key`]).
+    /// - Otherwise Delete or Backspace deletes the selection, Escape abandons
+    ///   the gesture in progress or, if there is none, clears the selection,
+    ///   and a tool's [hotkey](ToolKind::hotkey) switches to it.
+    fn key(
+        &mut self,
+        key: &keyboard::Key,
+        modifiers: keyboard::Modifiers,
+        text: Option<&str>,
+    ) -> Option<Event> {
         use keyboard::key::Named;
         use keyboard::Key;
 
+        if modifiers.command() {
+            let Key::Character(c) = key.as_ref() else {
+                return None;
+            };
+            match c {
+                "z" if modifiers.shift() => self.redo(),
+                "z" => self.undo(),
+                "s" | "c" => {
+                    self.finish();
+                    return Some(if c == "s" { Event::Save } else { Event::Copy });
+                }
+                "0" => self.zoom_by(ZoomChange::Fit),
+                "1" => self.zoom_by(ZoomChange::ActualSize),
+                "=" | "+" => self.zoom_by(ZoomChange::In),
+                "-" => self.zoom_by(ZoomChange::Out),
+                _ => {}
+            }
+            return None;
+        }
         if self.tool.text_edit().is_some() {
             self.type_key(key, modifiers, text);
-        } else if let Key::Named(Named::Delete | Named::Backspace) = key.as_ref() {
-            self.delete_selection();
+            return None;
         }
+        match key.as_ref() {
+            Key::Named(Named::Delete | Named::Backspace) => self.delete_selection(),
+            Key::Named(Named::Escape) => {
+                if !self.with_tool(|tool, cx| tool.escape(cx)) {
+                    self.document.clear_selection();
+                }
+            }
+            Key::Character(c) if !modifiers.control() && !modifiers.alt() => {
+                if let Some(kind) = ToolKind::from_hotkey(c) {
+                    self.set_tool(kind);
+                }
+            }
+            _ => {}
+        }
+        None
     }
 
     /// Typing into the open text edit.
@@ -217,7 +341,7 @@ impl Editor {
 
     /// Deletes the selected annotations as one undo step.
     fn delete_selection(&mut self) {
-        self.with_tool(|tool, cx| tool.finish(cx));
+        self.finish();
         let ids = self.document.selection().iter().copied().collect();
         self.document.apply(Command::Delete { ids });
     }
@@ -614,15 +738,17 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_chords_do_not_type_and_blank_text_is_discarded() {
+    fn unbound_chords_do_not_type_and_blank_text_is_discarded() {
         let mut editor = editor();
         editor.update(Message::Tool(ToolKind::Text));
         click(&mut editor, at(20.0, 100.0));
-        key_with(
-            &mut editor,
-            keyboard::Key::Character("z".into()),
-            keyboard::Modifiers::COMMAND,
-            Some("z"),
+        chord(&mut editor, "k", keyboard::Modifiers::COMMAND);
+        assert!(
+            editor
+                .tool
+                .text_edit()
+                .is_some_and(|edit| edit.content().is_empty()),
+            "Cmd+K neither typed nor closed the edit"
         );
         type_text(&mut editor, " ");
         named(&mut editor, Named::Escape);
@@ -642,5 +768,125 @@ mod tests {
         // Typing no longer goes anywhere.
         type_text(&mut editor, "x");
         assert_eq!(only_text(&editor).content, "Note");
+    }
+
+    /// A key press typing `c` with `modifiers`.
+    fn chord(editor: &mut Editor, c: &str, modifiers: keyboard::Modifiers) -> Option<Event> {
+        key_with(
+            editor,
+            keyboard::Key::Character(c.into()),
+            modifiers,
+            Some(c),
+        )
+    }
+
+    const COMMAND_SHIFT: keyboard::Modifiers =
+        keyboard::Modifiers::COMMAND.union(keyboard::Modifiers::SHIFT);
+
+    #[test]
+    fn undo_and_redo_shortcuts_round_trip_an_edit() {
+        let mut editor = line_editor();
+        drag(&mut editor, at(10.0, 10.0), at(90.0, 10.0));
+        chord(&mut editor, "z", keyboard::Modifiers::COMMAND);
+        assert!(editor.document().annotations().is_empty());
+        chord(&mut editor, "z", COMMAND_SHIFT);
+        assert_eq!(editor.document().annotations().len(), 1);
+        editor.update(Message::Undo);
+        assert!(editor.document().annotations().is_empty());
+        editor.update(Message::Redo);
+        assert_eq!(editor.document().annotations().len(), 1);
+    }
+
+    #[test]
+    fn undo_while_typing_commits_the_text_then_undoes_it() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(20.0, 100.0));
+        type_text(&mut editor, "Hi");
+        chord(&mut editor, "z", keyboard::Modifiers::COMMAND);
+        assert!(editor.document().annotations().is_empty());
+        assert!(editor.tool.text_edit().is_none(), "the edit is closed");
+        chord(&mut editor, "z", COMMAND_SHIFT);
+        assert_eq!(only_text(&editor).content, "Hi");
+    }
+
+    #[test]
+    fn hotkeys_switch_tools_except_while_typing() {
+        let mut editor = editor();
+        for (key, kind) in [
+            ("l", ToolKind::Line),
+            ("A", ToolKind::Arrow),
+            ("r", ToolKind::Rectangle),
+            ("t", ToolKind::Text),
+        ] {
+            chord(&mut editor, key, keyboard::Modifiers::default());
+            assert_eq!(editor.tool(), kind, "{key}");
+        }
+        click(&mut editor, at(20.0, 100.0));
+        type_text(&mut editor, "v");
+        assert_eq!(editor.tool(), ToolKind::Text, "typed, not a hotkey");
+        named(&mut editor, Named::Escape);
+        assert_eq!(only_text(&editor).content, "v");
+        chord(&mut editor, "v", keyboard::Modifiers::default());
+        assert_eq!(editor.tool(), ToolKind::Select);
+    }
+
+    #[test]
+    fn escape_abandons_a_drag_and_otherwise_clears_the_selection() {
+        let mut editor = line_editor();
+        press(&mut editor, at(10.0, 10.0), 1);
+        input(
+            &mut editor,
+            InputKind::Move {
+                position: at(90.0, 10.0),
+            },
+        );
+        named(&mut editor, Named::Escape);
+        input(
+            &mut editor,
+            InputKind::Release {
+                position: at(90.0, 10.0),
+            },
+        );
+        assert!(editor.document().annotations().is_empty());
+        assert!(!editor.document().can_undo());
+
+        drag(&mut editor, at(10.0, 10.0), at(90.0, 10.0));
+        assert_eq!(editor.document().selection().len(), 1);
+        named(&mut editor, Named::Escape);
+        assert!(editor.document().selection().is_empty());
+        assert_eq!(editor.document().annotations().len(), 1);
+    }
+
+    #[test]
+    fn save_and_copy_are_events_after_finishing_the_open_edit() {
+        let mut editor = editor();
+        editor.update(Message::Tool(ToolKind::Text));
+        click(&mut editor, at(20.0, 100.0));
+        type_text(&mut editor, "Hi");
+        let save = chord(&mut editor, "s", keyboard::Modifiers::COMMAND);
+        assert_eq!(save, Some(Event::Save));
+        assert_eq!(only_text(&editor).content, "Hi");
+        let copy = chord(&mut editor, "c", keyboard::Modifiers::COMMAND);
+        assert_eq!(copy, Some(Event::Copy));
+        assert_eq!(
+            chord(&mut editor, "c", keyboard::Modifiers::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn zoom_shortcuts_and_messages() {
+        let mut editor = editor();
+        input(&mut editor, InputKind::Resized);
+        assert_eq!(editor.zoom(), Zoom::Fit);
+        chord(&mut editor, "=", keyboard::Modifiers::COMMAND);
+        assert_eq!(editor.zoom(), Zoom::Scale(ZOOM_STEP), "fit was 1:1");
+        chord(&mut editor, "-", keyboard::Modifiers::COMMAND);
+        assert_eq!(editor.zoom(), Zoom::Scale(1.0));
+        chord(&mut editor, "0", keyboard::Modifiers::COMMAND);
+        assert_eq!(editor.zoom(), Zoom::Fit);
+        editor.update(Message::Zoom(ZoomChange::ActualSize));
+        assert_eq!(editor.zoom(), Zoom::Scale(1.0));
     }
 }
