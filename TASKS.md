@@ -184,12 +184,12 @@ Owns: `chartreuse-core::display`, `chartreuse-platform/src/macos/displays.rs`
 
 Owns: `chartreuse-imaging`
 
-- [ ] Crop and copy regions in physical pixels
-- [ ] Composite several per-display captures into one image (layout taken from the
+- [x] Crop and copy regions in physical pixels
+- [x] Composite several per-display captures into one image (layout taken from the
       display model types)
-- [ ] Encode and decode PNG, JPEG, and other common formats; choose the crate here
-- [ ] Pixelate and blur kernels (used later by 3B)
-- [ ] Unit tests
+- [x] Encode and decode PNG, JPEG, and other common formats; choose the crate here
+- [x] Pixelate and blur kernels (used later by 3B)
+- [x] Unit tests
 
 ### 1F — Config
 
