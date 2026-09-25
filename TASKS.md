@@ -278,15 +278,15 @@ Depends on: 1D. Owns: `chartreuse-overlay::rectangle`
 
 Depends on: 1G. Owns: `chartreuse-editor::{canvas,tools}`, the editor window view
 
-- [ ] Tool framework: a `Tool` trait and interaction state machine, with one module per
+- [x] Tool framework: a `Tool` trait and interaction state machine, with one module per
       tool. Land this first; the tools below can then be split among agents.
-  - [ ] Line
-  - [ ] Arrow
-  - [ ] Rectangle
-  - [ ] Text (cosmic-text rendering, in-place editing)
-- [ ] Select, move, and delete annotations, with selection handles
-- [ ] Keyboard shortcuts for undo/redo and delete
-- [ ] Toolbar with style controls, using the accent color
+  - [x] Line
+  - [x] Arrow
+  - [x] Rectangle
+  - [x] Text (cosmic-text rendering, in-place editing)
+- [x] Select, move, and delete annotations, with selection handles
+- [x] Keyboard shortcuts for undo/redo and delete
+- [x] Toolbar with style controls, using the accent color
 
 ### 2F — Flatten and export
 
