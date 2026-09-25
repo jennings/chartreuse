@@ -208,4 +208,39 @@ impl App {
         let fake = fake::Fake::new();
         (Self::new(fake.platform()), fake)
     }
+
+    /// Handles `message`, then every message its tasks produce, depth first,
+    /// until nothing is left to do. Futures run to completion on this thread.
+    /// Other actions (opening or focusing a window, …) are dropped as they
+    /// arrive, so tasks waiting on their answer end. Returns every message
+    /// handled, in order, starting with `message`.
+    pub fn settle(&mut self, message: Message) -> Vec<Message> {
+        use futures::executor::block_on;
+        use futures::StreamExt;
+        use iced_runtime::Action;
+
+        let mut pending = vec![message];
+        let mut handled = Vec::new();
+        while let Some(message) = pending.pop() {
+            handled.push(message.clone());
+            let task = self.update(message);
+            let outputs: Vec<Message> = iced_runtime::task::into_stream(task)
+                .map(|stream| {
+                    block_on(
+                        stream
+                            .filter_map(|action| {
+                                futures::future::ready(match action {
+                                    Action::Output(message) => Some(message),
+                                    _ => None,
+                                })
+                            })
+                            .collect(),
+                    )
+                })
+                .unwrap_or_default();
+            // Depth first: the first output is handled next.
+            pending.extend(outputs.into_iter().rev());
+        }
+        handled
+    }
 }

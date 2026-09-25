@@ -18,12 +18,17 @@ chartreuse-platform.workspace = true
 iced.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# Local time for saved file names.
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+# The platform's Pictures folder, the default save directory.
+dirs = "6.0.0"
 
 [dev-dependencies]
 futures.workspace = true
 # Tests inspect the actions a `Task` performs (e.g. that Quit exits); iced does
 # not re-export `task::into_stream`. Same version as `iced`.
 iced_runtime = "=0.14.0"
+tempfile = "3.27.0"
 
 [features]
 # Build the release flavor (see `chartreuse_core::flavor`). Set by
