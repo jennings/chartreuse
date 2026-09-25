@@ -9,8 +9,9 @@ use crate::sign::{self, Identity, SignOptions};
 use crate::util::{cargo, run, target_dir, Context, Error, Result};
 use crate::{dev_cert, icon};
 
-/// The executable's name, in `target/<profile>/` and in `Contents/MacOS/`.
-const EXECUTABLE: &str = "chartreuse";
+/// The executable's name (without `.exe`), in `target/<profile>/` and in
+/// `Contents/MacOS/`.
+pub const EXECUTABLE: &str = "chartreuse";
 /// The icon's name in `Contents/Resources/`, without `.icns`.
 const ICON_FILE: &str = "AppIcon";
 

@@ -29,9 +29,13 @@ Commands:
   dev-cert  create a self-signed development signing identity in its own
             keychain (macOS, once per machine), so the Screen Recording
             permission survives rebuilds
-  release   release build for this OS; on macOS a release-flavor Chartreuse.app
-            signed with $CHARTREUSE_RELEASE_SIGN_IDENTITY, zipped into target/dist
-            --allow-ad-hoc  sign ad-hoc when the identity is unset (local only)
+  release   release build for this OS, archived into target/dist (emptied
+            first) as Chartreuse-<version>-<os>-<arch>: on macOS a zipped
+            release-flavor Chartreuse.app signed with
+            $CHARTREUSE_RELEASE_SIGN_IDENTITY; on Windows (.zip) and Linux
+            (.tar.gz) the executable with LICENSE and README.md
+            --allow-ad-hoc  macOS: sign ad-hoc when the identity is unset; the
+                            archive name ends in -unsigned
 ";
 
 fn main() -> ExitCode {
