@@ -7,6 +7,7 @@ pub mod capture;
 pub mod color;
 pub mod display;
 pub mod error;
+pub mod flavor;
 pub mod geometry;
 pub mod hotkey;
 pub mod image;

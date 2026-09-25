@@ -11,5 +11,9 @@ publish.workspace = true
 [dependencies]
 thiserror = "2.0.21"
 
+[features]
+# Build the release flavor (see `flavor`). Set by `cargo xtask release` only.
+release-flavor = []
+
 [lints]
 workspace = true
