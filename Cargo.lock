@@ -596,6 +596,7 @@ version = "0.1.0"
 dependencies = [
  "chartreuse-core",
  "chartreuse-imaging",
+ "chartreuse-platform",
  "iced",
  "iced_runtime",
  "smol_str",
