@@ -6,6 +6,7 @@ use chartreuse_core::image::Image;
 
 use super::annotation::{Annotation, AnnotationId, Shape};
 use super::geometry::{Point, Rect, Size};
+use super::history::{Command, Edit, History, State};
 use super::style::Style;
 
 /// An image being annotated.
@@ -16,23 +17,39 @@ use super::style::Style;
 ///
 /// The selection is a set of ids of annotations in the document; ids that stop
 /// existing are dropped from it.
+///
+/// # Undo
+///
+/// [`add`](Self::add) and [`apply`](Self::apply) record one undo step each,
+/// unless they change nothing; recording clears the redo stack. Selection
+/// changes and [`set_text_size`](Self::set_text_size) are not edits and are
+/// not recorded.
+///
+/// Selection across edits: `add` and `apply` leave the selection alone except
+/// to drop deleted ids. [`undo`](Self::undo) and [`redo`](Self::redo) replace
+/// the selection with the annotations the undone or redone step touched that
+/// still exist, so the user sees what changed: undoing a move or delete selects
+/// the moved or restored annotations, while undoing an add (or redoing a
+/// delete) leaves nothing selected.
 #[derive(Debug, Clone)]
 pub struct Document {
     base: Image,
-    annotations: Vec<Annotation>,
+    state: State,
     selection: BTreeSet<AnnotationId>,
     next_id: u64,
+    history: History,
 }
 
 impl Document {
     /// A document with no annotations over `base`.
     #[must_use]
-    pub const fn new(base: Image) -> Self {
+    pub fn new(base: Image) -> Self {
         Self {
             base,
-            annotations: Vec::new(),
+            state: State::default(),
             selection: BTreeSet::new(),
             next_id: 0,
+            history: History::default(),
         }
     }
 
@@ -53,34 +70,88 @@ impl Document {
     /// Every annotation, bottom to top.
     #[must_use]
     pub fn annotations(&self) -> &[Annotation] {
-        &self.annotations
+        &self.state.annotations
     }
 
     #[must_use]
     pub fn get(&self, id: AnnotationId) -> Option<&Annotation> {
-        self.index_of(id).map(|index| &self.annotations[index])
+        self.index_of(id)
+            .map(|index| &self.state.annotations[index])
     }
 
     /// The annotation's z-order position (0 = bottom).
     #[must_use]
     pub fn index_of(&self, id: AnnotationId) -> Option<usize> {
-        self.annotations.iter().position(|a| a.id() == id)
+        self.state.annotations.iter().position(|a| a.id() == id)
     }
 
-    /// Adds an annotation on top of the others and returns its new id. The
-    /// selection is unchanged; select the new annotation explicitly if wanted.
+    /// Adds an annotation on top of the others and returns its new id; one
+    /// undo step. The selection is unchanged; select the new annotation
+    /// explicitly if wanted.
     pub fn add(&mut self, shape: Shape, style: Style) -> AnnotationId {
         let id = AnnotationId(self.next_id);
         self.next_id += 1;
-        self.annotations.push(Annotation::new(id, shape, style));
+        let edit = Edit::add(&self.state, Annotation::new(id, shape, style));
+        self.commit(edit);
         id
+    }
+
+    /// Applies `command` as one undo step. Returns false, recording nothing, if
+    /// it would change nothing (see [`Command`]).
+    pub fn apply(&mut self, command: Command) -> bool {
+        match Edit::plan(command, &self.state) {
+            Some(edit) => {
+                self.commit(edit);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn commit(&mut self, edit: Edit) {
+        edit.apply(&mut self.state);
+        self.history.record(edit);
+        let annotations = &self.state.annotations;
+        self.selection
+            .retain(|id| annotations.iter().any(|a| a.id() == *id));
+    }
+
+    #[must_use]
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    #[must_use]
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Reverts the latest recorded step. Returns false if there is none.
+    pub fn undo(&mut self) -> bool {
+        let touched = self.history.undo(&mut self.state);
+        self.select_touched(touched)
+    }
+
+    /// Re-applies the latest undone step. Returns false if there is none.
+    pub fn redo(&mut self) -> bool {
+        let touched = self.history.redo(&mut self.state);
+        self.select_touched(touched)
+    }
+
+    fn select_touched(&mut self, touched: Option<Vec<AnnotationId>>) -> bool {
+        let Some(touched) = touched else {
+            return false;
+        };
+        self.set_selection(touched);
+        true
     }
 
     /// The topmost annotation that `point` hits, with `tolerance` in document
     /// units (see [`Shape::hit`]).
     #[must_use]
     pub fn annotation_at(&self, point: Point, tolerance: f32) -> Option<AnnotationId> {
-        self.annotations
+        self.state
+            .annotations
             .iter()
             .rev()
             .find(|a| a.hit(point, tolerance))
@@ -95,7 +166,8 @@ impl Document {
 
     /// The selected annotations, bottom to top.
     pub fn selected(&self) -> impl Iterator<Item = &Annotation> {
-        self.annotations
+        self.state
+            .annotations
             .iter()
             .filter(|a| self.selection.contains(&a.id()))
     }
@@ -148,7 +220,7 @@ impl Document {
         let Some(index) = self.index_of(id) else {
             return false;
         };
-        match &mut self.annotations[index].shape {
+        match &mut self.state.annotations[index].shape {
             Shape::Text(text) => {
                 text.set_measured(Some(size));
                 true
@@ -159,25 +231,28 @@ impl Document {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
     use chartreuse_core::color::Rgba8;
     use chartreuse_core::geometry::PhysicalSize;
 
-    use super::super::annotation::{Line, Rectangle, Text};
+    use super::super::annotation::{Arrow, Line, Rectangle, Text};
+    use super::super::geometry::Vector;
+    use super::super::history::Reorder;
+    use super::super::style::StylePatch;
     use super::*;
 
-    pub(in super::super) fn document() -> Document {
+    fn document() -> Document {
         Document::new(Image::filled(PhysicalSize::new(200, 100), Rgba8::WHITE))
     }
 
-    pub(in super::super) fn line(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
+    fn line(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
         Shape::Line(Line {
             start: Point::new(ax, ay),
             end: Point::new(bx, by),
         })
     }
 
-    pub(in super::super) fn rectangle(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
+    fn rectangle(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
         Shape::Rectangle(Rectangle {
             rect: Rect::from_corners(Point::new(ax, ay), Point::new(bx, by)),
         })
@@ -257,5 +332,493 @@ pub(super) mod tests {
             Rect::from_corners(Point::ORIGIN, Point::new(80.0, 30.0))
         );
         assert_eq!(doc.annotation_at(Point::new(79.0, 29.0), 0.0), Some(text));
+    }
+
+    fn text(content: &str) -> Shape {
+        Shape::Text(Text::new(Point::new(10.0, 10.0), content))
+    }
+
+    fn ids(doc: &Document) -> Vec<AnnotationId> {
+        doc.annotations().iter().map(Annotation::id).collect()
+    }
+
+    fn selection(doc: &Document) -> Vec<AnnotationId> {
+        doc.selection().iter().copied().collect()
+    }
+
+    fn measured(doc: &Document, id: AnnotationId) -> Option<Size> {
+        match &doc.get(id).unwrap().shape {
+            Shape::Text(text) => text.measured(),
+            other => panic!("not text: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_is_undoable_and_redo_restores_the_same_id() {
+        let mut doc = document();
+        assert!(!doc.can_undo() && !doc.can_redo());
+        let a = doc.add(line(0.0, 0.0, 10.0, 10.0), Style::default());
+        let added = doc.annotations().to_vec();
+        assert!(doc.can_undo());
+
+        assert!(doc.undo());
+        assert!(doc.annotations().is_empty());
+        assert!(!doc.can_undo() && doc.can_redo());
+        assert!(!doc.undo());
+
+        assert!(doc.redo());
+        assert_eq!(ids(&doc), [a]);
+        assert_eq!(doc.annotations(), added.as_slice());
+        assert!(!doc.redo());
+    }
+
+    #[test]
+    fn ids_are_never_reused_after_undo() {
+        let mut doc = document();
+        let a = doc.add(line(0.0, 0.0, 10.0, 10.0), Style::default());
+        doc.undo();
+        let b = doc.add(line(0.0, 0.0, 10.0, 10.0), Style::default());
+        assert!(b > a);
+        assert!(doc.get(a).is_none());
+    }
+
+    #[test]
+    fn a_new_step_clears_the_redo_stack() {
+        let mut doc = document();
+        let a = doc.add(line(0.0, 0.0, 10.0, 10.0), Style::default());
+        assert!(doc.apply(Command::Translate {
+            ids: vec![a],
+            delta: Vector::new(5.0, 0.0),
+        }));
+        doc.undo();
+        assert!(doc.can_redo());
+        assert!(doc.apply(Command::Translate {
+            ids: vec![a],
+            delta: Vector::new(0.0, 5.0),
+        }));
+        assert!(!doc.can_redo() && !doc.redo());
+
+        // Adding clears it too.
+        doc.undo();
+        assert!(doc.can_redo());
+        doc.add(line(0.0, 0.0, 1.0, 1.0), Style::default());
+        assert!(!doc.can_redo());
+
+        // A no-op does not.
+        doc.undo();
+        assert!(!doc.apply(Command::Delete { ids: vec![] }));
+        assert!(doc.can_redo());
+    }
+
+    #[test]
+    fn no_op_commands_are_not_recorded() {
+        let mut doc = document();
+        let a = doc.add(line(0.0, 0.0, 10.0, 10.0), Style::default());
+        let t = doc.add(text("hi"), Style::default());
+        let ghost = AnnotationId(99);
+        let delta = Vector::new(5.0, 5.0);
+        let noops = [
+            Command::Translate {
+                ids: vec![a],
+                delta: Vector::ZERO,
+            },
+            Command::Translate { ids: vec![], delta },
+            Command::Translate {
+                ids: vec![ghost],
+                delta,
+            },
+            Command::Translate {
+                ids: vec![a],
+                delta: Vector::new(f32::NAN, 0.0),
+            },
+            Command::Translate {
+                ids: vec![a],
+                delta: Vector::new(f32::INFINITY, 0.0),
+            },
+            Command::Restyle {
+                ids: vec![a, t],
+                patch: StylePatch {
+                    color: Some(Style::DEFAULT_COLOR),
+                    ..StylePatch::default()
+                },
+            },
+            Command::Restyle {
+                ids: vec![a],
+                patch: StylePatch::default(),
+            },
+            Command::Reshape {
+                id: a,
+                shape: line(0.0, 0.0, 10.0, 10.0),
+            },
+            Command::Reshape {
+                id: ghost,
+                shape: line(0.0, 0.0, 1.0, 1.0),
+            },
+            Command::EditText {
+                id: t,
+                content: "hi".into(),
+            },
+            Command::EditText {
+                id: a,
+                content: "not text".into(),
+            },
+            Command::Delete { ids: vec![ghost] },
+            Command::Reorder {
+                ids: vec![t],
+                step: Reorder::ToFront,
+            },
+            Command::Reorder {
+                ids: vec![t],
+                step: Reorder::Forward,
+            },
+            Command::Reorder {
+                ids: vec![a],
+                step: Reorder::ToBack,
+            },
+            Command::Reorder {
+                ids: vec![a],
+                step: Reorder::Backward,
+            },
+            Command::Reorder {
+                ids: vec![a, t],
+                step: Reorder::Forward,
+            },
+            Command::Reorder {
+                ids: vec![ghost],
+                step: Reorder::ToBack,
+            },
+        ];
+        let before = doc.annotations().to_vec();
+        for command in noops {
+            assert!(!doc.apply(command.clone()), "{command:?} was applied");
+        }
+        assert_eq!(doc.annotations(), before.as_slice());
+        // The two adds are still the only steps.
+        assert!(doc.undo() && doc.undo());
+        assert!(!doc.undo());
+    }
+
+    #[test]
+    fn translate_moves_each_annotation_once_and_undo_restores_exactly() {
+        let mut doc = document();
+        let a = doc.add(line(0.1, 0.2, 10.3, 10.7), Style::default());
+        doc.add(rectangle(1.0, 1.0, 5.0, 5.0), Style::default());
+        let c = doc.add(text("x"), Style::default());
+        let before = doc.annotations().to_vec();
+        let delta = Vector::new(0.1, 0.7);
+
+        assert!(doc.apply(Command::Translate {
+            ids: vec![a, c, a],
+            delta,
+        }));
+        let moved = |index: usize| {
+            let mut shape = before[index].shape.clone();
+            shape.translate(delta);
+            shape
+        };
+        assert_eq!(doc.annotations()[0].shape, moved(0));
+        assert_eq!(doc.annotations()[1], before[1]);
+        assert_eq!(doc.annotations()[2].shape, moved(2));
+
+        assert!(doc.undo());
+        assert_eq!(doc.annotations(), before.as_slice());
+    }
+
+    #[test]
+    fn restyle_undo_restores_each_previous_style() {
+        let mut doc = document();
+        let thin_blue = Style {
+            color: Rgba8::rgb(0, 0, 255),
+            stroke_width: 2.0,
+            ..Style::default()
+        };
+        let thick = Style {
+            stroke_width: 8.0,
+            ..Style::default()
+        };
+        let a = doc.add(line(0.0, 0.0, 1.0, 1.0), thin_blue);
+        let b = doc.add(line(0.0, 0.0, 1.0, 1.0), thick);
+        let green = Rgba8::rgb(0, 255, 0);
+        assert!(doc.apply(Command::Restyle {
+            ids: vec![a, b],
+            patch: StylePatch {
+                color: Some(green),
+                ..StylePatch::default()
+            },
+        }));
+        assert_eq!(doc.get(a).unwrap().style.color, green);
+        assert_eq!(doc.get(a).unwrap().style.stroke_width, 2.0);
+        assert_eq!(doc.get(b).unwrap().style.color, green);
+        assert_eq!(doc.get(b).unwrap().style.stroke_width, 8.0);
+
+        doc.undo();
+        assert_eq!(doc.get(a).unwrap().style, thin_blue);
+        assert_eq!(doc.get(b).unwrap().style, thick);
+    }
+
+    #[test]
+    fn delete_restores_positions_ids_and_selection_on_undo() {
+        let mut doc = document();
+        let all: Vec<_> = [0.0, 10.0, 20.0, 30.0, 40.0]
+            .into_iter()
+            .map(|y| doc.add(line(0.0, y, 100.0, y), Style::default()))
+            .collect();
+        let before = doc.annotations().to_vec();
+        doc.set_selection([all[1], all[3], all[4]]);
+
+        assert!(doc.apply(Command::Delete {
+            ids: vec![all[3], all[1], AnnotationId(99)],
+        }));
+        assert_eq!(ids(&doc), [all[0], all[2], all[4]]);
+        assert_eq!(selection(&doc), [all[4]]);
+
+        assert!(doc.undo());
+        assert_eq!(doc.annotations(), before.as_slice());
+        assert_eq!(selection(&doc), [all[1], all[3]]);
+
+        assert!(doc.redo());
+        assert_eq!(ids(&doc), [all[0], all[2], all[4]]);
+        assert!(doc.selection().is_empty());
+    }
+
+    #[test]
+    fn reorder_changes_the_topmost_hit_and_is_undoable() {
+        let mut doc = document();
+        let a = doc.add(line(0.0, 50.0, 200.0, 50.0), Style::default());
+        let b = doc.add(line(100.0, 0.0, 100.0, 100.0), Style::default());
+        let c = doc.add(line(0.0, 0.0, 200.0, 100.0), Style::default());
+        let cross = Point::new(100.0, 50.0);
+        assert_eq!(doc.annotation_at(cross, 0.0), Some(c));
+
+        assert!(doc.apply(Command::Reorder {
+            ids: vec![a],
+            step: Reorder::ToFront,
+        }));
+        assert_eq!(ids(&doc), [b, c, a]);
+        assert_eq!(doc.annotation_at(cross, 0.0), Some(a));
+
+        assert!(doc.apply(Command::Reorder {
+            ids: vec![a],
+            step: Reorder::Backward,
+        }));
+        assert_eq!(ids(&doc), [b, a, c]);
+
+        assert!(doc.undo());
+        assert_eq!(ids(&doc), [b, c, a]);
+        assert_eq!(selection(&doc), [a]);
+        assert!(doc.undo());
+        assert_eq!(ids(&doc), [a, b, c]);
+        assert!(doc.redo() && doc.redo());
+        assert_eq!(ids(&doc), [b, a, c]);
+    }
+
+    #[test]
+    fn undo_and_redo_select_what_the_step_touched() {
+        let mut doc = document();
+        let a = doc.add(line(0.0, 0.0, 1.0, 1.0), Style::default());
+        let b = doc.add(line(0.0, 0.0, 1.0, 1.0), Style::default());
+        doc.set_selection([a, b]);
+        assert!(doc.apply(Command::Translate {
+            ids: vec![a],
+            delta: Vector::new(1.0, 0.0),
+        }));
+        // Applying leaves the selection alone.
+        assert_eq!(selection(&doc), [a, b]);
+        doc.clear_selection();
+
+        doc.undo();
+        assert_eq!(selection(&doc), [a]);
+        doc.set_selection([b]);
+        doc.redo();
+        assert_eq!(selection(&doc), [a]);
+
+        // Undoing the move, then the add of `b`: `b` is gone, so nothing is
+        // selected.
+        doc.undo();
+        doc.set_selection([b]);
+        doc.undo();
+        assert!(doc.selection().is_empty());
+        // Redoing the add selects the restored annotation.
+        doc.redo();
+        assert_eq!(selection(&doc), [b]);
+    }
+
+    #[test]
+    fn text_edits_are_undoable_and_invalidate_the_measurement() {
+        let mut doc = document();
+        let t = doc.add(text("hi"), Style::default());
+        let hi_size = Size::new(30.0, 29.0);
+        doc.set_text_size(t, hi_size);
+
+        assert!(doc.apply(Command::EditText {
+            id: t,
+            content: "hello".into(),
+        }));
+        let Shape::Text(edited) = &doc.get(t).unwrap().shape else {
+            unreachable!()
+        };
+        assert_eq!(edited.content, "hello");
+        assert_eq!(edited.measured(), None);
+        doc.set_text_size(t, Size::new(60.0, 29.0));
+
+        // Undo brings back the old text with the measurement taken for it.
+        doc.undo();
+        let Shape::Text(restored) = &doc.get(t).unwrap().shape else {
+            unreachable!()
+        };
+        assert_eq!(restored.content, "hi");
+        assert_eq!(restored.measured(), Some(hi_size));
+        // Redo brings back the new text, to be measured again.
+        doc.redo();
+        assert_eq!(measured(&doc, t), None);
+    }
+
+    #[test]
+    fn font_size_changes_invalidate_the_text_measurement_but_color_does_not() {
+        let mut doc = document();
+        let t = doc.add(text("hi"), Style::default());
+        let size = Size::new(30.0, 29.0);
+        doc.set_text_size(t, size);
+        assert!(doc.apply(Command::Restyle {
+            ids: vec![t],
+            patch: StylePatch {
+                color: Some(Rgba8::BLACK),
+                ..StylePatch::default()
+            },
+        }));
+        assert_eq!(measured(&doc, t), Some(size));
+        assert!(doc.apply(Command::Restyle {
+            ids: vec![t],
+            patch: StylePatch {
+                font_size: Some(40.0),
+                ..StylePatch::default()
+            },
+        }));
+        assert_eq!(measured(&doc, t), None);
+    }
+
+    #[test]
+    fn reshape_replaces_geometry_keeping_the_measurement_of_unchanged_text() {
+        let mut doc = document();
+        let a = doc.add(line(0.0, 0.0, 10.0, 10.0), Style::default());
+        assert!(doc.apply(Command::Reshape {
+            id: a,
+            shape: line(0.0, 0.0, 50.0, 10.0),
+        }));
+        assert_eq!(doc.get(a).unwrap().shape, line(0.0, 0.0, 50.0, 10.0));
+        doc.undo();
+        assert_eq!(doc.get(a).unwrap().shape, line(0.0, 0.0, 10.0, 10.0));
+
+        let t = doc.add(text("hi"), Style::default());
+        let size = Size::new(30.0, 29.0);
+        doc.set_text_size(t, size);
+        let moved = Shape::Text(Text::new(Point::new(50.0, 50.0), "hi"));
+        assert!(doc.apply(Command::Reshape {
+            id: t,
+            shape: moved
+        }));
+        assert_eq!(measured(&doc, t), Some(size));
+        let rewritten = Shape::Text(Text::new(Point::new(50.0, 50.0), "bye"));
+        assert!(doc.apply(Command::Reshape {
+            id: t,
+            shape: rewritten,
+        }));
+        assert_eq!(measured(&doc, t), None);
+    }
+
+    /// A small deterministic generator (an LCG) for the replay test.
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from(self.0 >> 33).unwrap() % n
+        }
+
+        fn coord(&mut self) -> f32 {
+            f32::from(u16::try_from(self.below(2000)).unwrap()) / 10.0
+        }
+
+        fn some_of(&mut self, ids: &[AnnotationId]) -> Vec<AnnotationId> {
+            ids.iter().copied().filter(|_| self.below(3) == 0).collect()
+        }
+    }
+
+    #[test]
+    fn undo_and_redo_replay_a_long_random_session_exactly() {
+        let mut rng = Rng(7);
+        let mut doc = document();
+        let mut states = vec![doc.annotations().to_vec()];
+        for _ in 0..500 {
+            let existing = ids(&doc);
+            let changed = match rng.below(8) {
+                0 | 1 => {
+                    let (ax, ay, bx, by) = (rng.coord(), rng.coord(), rng.coord(), rng.coord());
+                    let shape = match rng.below(4) {
+                        0 => line(ax, ay, bx, by),
+                        1 => Shape::Arrow(Arrow {
+                            start: Point::new(ax, ay),
+                            end: Point::new(bx, by),
+                        }),
+                        2 => rectangle(ax, ay, bx, by),
+                        _ => Shape::Text(Text::new(Point::new(ax, ay), "note")),
+                    };
+                    doc.add(shape, Style::default());
+                    true
+                }
+                2 => doc.apply(Command::Translate {
+                    ids: rng.some_of(&existing),
+                    delta: Vector::new(rng.coord() - 100.0, rng.coord() - 100.0),
+                }),
+                3 => doc.apply(Command::Restyle {
+                    ids: rng.some_of(&existing),
+                    patch: StylePatch {
+                        stroke_width: Some(rng.coord()),
+                        font_size: (rng.below(2) == 0).then(|| rng.coord()),
+                        ..StylePatch::default()
+                    },
+                }),
+                4 => doc.apply(Command::Delete {
+                    ids: rng.some_of(&existing),
+                }),
+                5 if !existing.is_empty() => doc.apply(Command::EditText {
+                    id: existing[rng.below(existing.len())],
+                    content: format!("edit {}", rng.below(100)),
+                }),
+                6 if !existing.is_empty() => doc.apply(Command::Reshape {
+                    id: existing[rng.below(existing.len())],
+                    shape: line(rng.coord(), rng.coord(), rng.coord(), rng.coord()),
+                }),
+                _ => doc.apply(Command::Reorder {
+                    ids: rng.some_of(&existing),
+                    step: [
+                        Reorder::Forward,
+                        Reorder::Backward,
+                        Reorder::ToFront,
+                        Reorder::ToBack,
+                    ][rng.below(4)],
+                }),
+            };
+            if changed {
+                states.push(doc.annotations().to_vec());
+            } else {
+                assert_eq!(doc.annotations(), states.last().unwrap().as_slice());
+            }
+        }
+        assert!(states.len() > 300, "too few steps: {}", states.len());
+
+        for state in states.iter().rev().skip(1) {
+            assert!(doc.undo());
+            assert_eq!(doc.annotations(), state.as_slice());
+        }
+        assert!(!doc.undo());
+        for state in states.iter().skip(1) {
+            assert!(doc.redo());
+            assert_eq!(doc.annotations(), state.as_slice());
+        }
+        assert!(!doc.redo());
     }
 }

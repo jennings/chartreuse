@@ -13,13 +13,30 @@
 //! transform, and must scale screen-space quantities (such as a hit-test
 //! tolerance of a few logical points) into document units before calling the
 //! model.
+//!
+//! # Overview
+//!
+//! - [`Document`] owns the base image, the [`Annotation`]s in z-order (index 0
+//!   at the bottom), the selection, and the undo history.
+//! - An [`Annotation`] is a stable [`AnnotationId`], a [`Shape`] (one variant
+//!   per kind: [`Line`], [`Arrow`], [`Rectangle`], [`Text`]) and a [`Style`].
+//! - Edits go through [`Document::add`] and [`Document::apply`] with a
+//!   [`Command`]; each is one undo step, and no-ops are not recorded.
+//! - [`Document::annotation_at`] finds the topmost annotation under a point;
+//!   [`Shape::hit`] documents the hit area of each kind.
+//!
+//! The module docs at the top of `model/annotation.rs` and `model/history.rs`
+//! describe how 3B's kinds (step markers with derived numbering, blur regions,
+//! and so on) and the document-level crop slot in.
 
 mod annotation;
 mod document;
 mod geometry;
+mod history;
 mod style;
 
 pub use annotation::{Annotation, AnnotationId, Arrow, ArrowHead, Line, Rectangle, Shape, Text};
 pub use document::Document;
 pub use geometry::{distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector};
+pub use history::{Command, Reorder};
 pub use style::{Style, StylePatch};
