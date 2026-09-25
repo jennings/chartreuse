@@ -8,6 +8,7 @@ mod check;
 mod icon;
 mod info_plist;
 mod launch;
+mod release;
 mod sign;
 mod util;
 
@@ -21,6 +22,9 @@ Commands:
   bundle    build and sign target/debug/Chartreuse Dev.app (macOS); signs with
             $CHARTREUSE_SIGN_IDENTITY, or ad-hoc with a warning when unset
   run       bundle, then launch the app with `open`, its output on this terminal
+  release   release build for this OS; on macOS a release-flavor Chartreuse.app
+            signed with $CHARTREUSE_RELEASE_SIGN_IDENTITY, zipped into target/dist
+            --allow-ad-hoc  sign ad-hoc when the identity is unset (local only)
 ";
 
 fn main() -> ExitCode {
@@ -34,6 +38,8 @@ fn main() -> ExitCode {
         ["check"] => check::check(),
         ["bundle"] => bundle::Bundle::development().build().map(drop),
         ["run"] => launch::launch(),
+        ["release"] => release::release(false),
+        ["release", "--allow-ad-hoc"] => release::release(true),
         [] | ["help" | "--help" | "-h"] => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
