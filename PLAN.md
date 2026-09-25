@@ -52,6 +52,9 @@ or putting it on the clipboard.
 This section describes the elements the user interacts with, not their visual design,
 apart from the accent color.
 
+Napkin-sketch mockups of these elements live in [`Docs/`](Docs/) as `*.drawio.svg`
+files: they render as plain SVG and open for editing in draw.io.
+
 ### Accent color
 
 The UI uses a single accent color that identifies the build flavor at a glance:
