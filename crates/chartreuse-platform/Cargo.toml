@@ -28,5 +28,8 @@ objc2-foundation.workspace = true
 objc2-screen-capture-kit.workspace = true
 objc2-uniform-type-identifiers.workspace = true
 
+[dev-dependencies]
+chartreuse-imaging.workspace = true
+
 [lints]
 workspace = true

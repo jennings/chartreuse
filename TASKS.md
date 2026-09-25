@@ -223,9 +223,9 @@ soon as its own dependencies have landed.
 
 Depends on: 1C, 1D. Owns: `chartreuse-platform/src/macos/capture.rs`
 
-- [ ] `SCShareableContent` display enumeration, matched to the display model
-- [ ] `SCScreenshotManager` capture of every display at native resolution
-- [ ] Detect blank or wallpaper-only captures and send them to the 1C guidance flow
+- [x] `SCShareableContent` display enumeration, matched to the display model
+- [x] `SCScreenshotManager` capture of every display at native resolution
+- [x] Detect blank or wallpaper-only captures and send them to the 1C guidance flow
 
 ### 2B — Clipboard and file dialogs (macOS)
 
