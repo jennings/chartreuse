@@ -144,12 +144,12 @@ All tracks depend only on Stage 0. Together, 1A, 1B, and 1C complete M1.
 
 Owns: `chartreuse-platform/src/macos/status_item.rs`, `crates/chartreuse/src/tray.rs`
 
-- [ ] `NSStatusItem` with a placeholder template icon
-- [ ] Menu entries: Capture display, Capture window, Capture rectangle, Open from
+- [x] `NSStatusItem` with a placeholder template icon
+- [x] Menu entries: Capture display, Capture window, Capture rectangle, Open from
       clipboard, Open from file, Settings, Quit
-- [ ] Deliver menu actions as a `Subscription`
-- [ ] `NSApplicationActivationPolicyAccessory` (no Dock presence)
-- [ ] Wire Quit and log the other actions
+- [x] Deliver menu actions as a `Subscription`
+- [x] `NSApplicationActivationPolicyAccessory` (no Dock presence)
+- [x] Wire Quit and log the other actions
 
 ### 1B — Global hotkeys (macOS)
 
