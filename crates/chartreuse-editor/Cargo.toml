@@ -9,6 +9,9 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+chartreuse-core.workspace = true
+chartreuse-imaging.workspace = true
+iced.workspace = true
 
 [lints]
 workspace = true
