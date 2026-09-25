@@ -1,2 +1,147 @@
-//! The tool framework and one module per annotation tool. Owned by track 2E; the
-//! Stage 3 tools add their own modules here.
+//! The tool framework and one module per annotation tool. The Stage 3 tools
+//! add their own modules here.
+//!
+//! # How a tool works
+//!
+//! The [`Editor`](crate::Editor) owns one active [`Tool`] and feeds it
+//! [`Pointer`] events already converted to document coordinates, together
+//! with a [`Context`]: the document to edit, the style for new annotations,
+//! and the current zoom (so screen-space slop such as [`HIT_TOLERANCE`] can be
+//! converted to document units). A tool is a small state machine:
+//!
+//! - It keeps an in-progress gesture (a drag) to itself and describes it with
+//!   [`Tool::preview`], which the canvas draws on top of the document.
+//! - It commits a finished gesture to the document as exactly one undo step
+//!   (one [`Document::add`] or [`Document::apply`]).
+//! - [`Tool::escape`] abandons the gesture (the Escape key) and
+//!   [`Tool::finish`] completes it early (switching tools).
+//!
+//! Tools are pure logic over the model: they never touch the renderer, so they
+//! are tested by feeding them events.
+//!
+//! # Adding a tool
+//!
+//! Add a module with the tool type, a [`ToolKind`] variant, and an arm in
+//! [`ToolKind::create`]. Tools that draw a shape by dragging from one corner
+//! or end to the other only need a [`DragShape`] (see `line.rs`).
+
+mod drag;
+mod line;
+
+use std::fmt;
+
+use iced::mouse::Interaction;
+
+use crate::model::{Document, Point, Shape, Style};
+
+pub use drag::{DragShape, DragTool};
+pub use line::LineTool;
+
+/// How far from an annotation's drawn area a click still hits it, in canvas
+/// (screen) pixels.
+pub const HIT_TOLERANCE: f32 = 4.0;
+
+/// How far the pointer must move from where it was pressed before a press
+/// becomes a drag, in canvas pixels. Shorter drags are clicks and draw
+/// nothing.
+pub const DRAG_THRESHOLD: f32 = 3.0;
+
+/// The kinds of tool, one per toolbar button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolKind {
+    Line,
+}
+
+impl ToolKind {
+    /// Every kind, in toolbar order.
+    pub const ALL: [Self; 1] = [Self::Line];
+
+    /// The name shown in the toolbar.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Line => "Line",
+        }
+    }
+
+    /// A new tool of this kind, with nothing in progress.
+    #[must_use]
+    pub fn create(self) -> Box<dyn Tool> {
+        match self {
+            Self::Line => Box::<LineTool>::default(),
+        }
+    }
+}
+
+/// A pointer (primary mouse button) event, in document coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Pointer {
+    /// The button went down. `clicks` counts consecutive clicks at about the
+    /// same place: 1 for a single click, 2 for a double click, and so on.
+    Press { at: Point, clicks: u8 },
+    /// The pointer moved while the tool [is active](Tool::is_active).
+    Move { at: Point },
+    /// The button came up.
+    Release { at: Point },
+}
+
+/// What a tool works with while handling an event.
+#[derive(Debug)]
+pub struct Context<'a> {
+    pub document: &'a mut Document,
+    /// The style for new annotations.
+    pub style: Style,
+    /// The size of one canvas pixel in document units at the current zoom.
+    pub pixel: f32,
+    /// Whether Shift is held (constrains shapes).
+    pub shift: bool,
+}
+
+impl Context<'_> {
+    /// [`HIT_TOLERANCE`] in document units.
+    #[must_use]
+    pub fn tolerance(&self) -> f32 {
+        HIT_TOLERANCE * self.pixel
+    }
+
+    /// [`DRAG_THRESHOLD`] in document units.
+    #[must_use]
+    pub fn drag_threshold(&self) -> f32 {
+        DRAG_THRESHOLD * self.pixel
+    }
+}
+
+/// What the canvas draws for a tool's in-progress gesture.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Preview {
+    /// Nothing in progress.
+    None,
+    /// A new annotation being drawn, in the editor's current style.
+    New(Shape),
+}
+
+/// An annotation tool: a state machine turning pointer events into commands
+/// (see the [module docs](self)).
+pub trait Tool: fmt::Debug {
+    fn kind(&self) -> ToolKind;
+
+    /// Handles a pointer event.
+    fn pointer(&mut self, pointer: Pointer, cx: &mut Context<'_>);
+
+    /// Handles the Escape key: abandons the gesture in progress, leaving the
+    /// document untouched. Returns whether there was one.
+    fn escape(&mut self, cx: &mut Context<'_>) -> bool;
+
+    /// Completes the gesture in progress as if the user had finished it, for
+    /// example before switching tools.
+    fn finish(&mut self, cx: &mut Context<'_>);
+
+    /// Whether a gesture is in progress.
+    fn is_active(&self) -> bool;
+
+    /// The in-progress gesture, for the canvas to draw.
+    fn preview(&self) -> Preview;
+
+    /// The mouse cursor over document point `at`.
+    fn cursor(&self, document: &Document, at: Point, pixel: f32) -> Interaction;
+}
