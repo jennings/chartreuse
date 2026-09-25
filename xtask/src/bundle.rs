@@ -90,15 +90,7 @@ impl Bundle {
         if !cfg!(target_os = "macos") {
             return Err(Error("app bundles can only be built on macOS".into()));
         }
-        let mut build = cargo();
-        build.args(["build", "--package", "chartreuse"]);
-        if self.profile == Profile::Release {
-            build.arg("--release");
-        }
-        if self.flavor == Flavor::Release {
-            build.args(["--features", "release-flavor"]);
-        }
-        run(&mut build)?;
+        build_chartreuse(self.profile, self.flavor)?;
 
         let profile_dir = target_dir().join(self.profile.dir_name());
         let layout = Layout::new(&profile_dir, self.flavor);
@@ -137,6 +129,19 @@ impl Bundle {
         let work_dir = profile_dir.join(format!("icon-{}", self.flavor.bundle_id()));
         icon::build_icns(self.flavor.accent(), &work_dir, &layout.icns)
     }
+}
+
+/// Builds the `chartreuse` executable into `target/<profile>/`.
+pub fn build_chartreuse(profile: Profile, flavor: Flavor) -> Result {
+    let mut build = cargo();
+    build.args(["build", "--package", "chartreuse"]);
+    if profile == Profile::Release {
+        build.arg("--release");
+    }
+    if flavor == Flavor::Release {
+        build.args(["--features", "release-flavor"]);
+    }
+    run(&mut build)
 }
 
 #[cfg(test)]
