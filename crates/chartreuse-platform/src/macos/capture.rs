@@ -17,7 +17,9 @@
 //!
 //! The private helpers ([`with_shareable_content`], [`stream_configuration`],
 //! [`capture_image`], [`own_application`], [`error_from_ns`]) are shared with
-//! window capture.
+//! window capture. The window list (`window_list.rs`) reuses
+//! [`with_shareable_content`], [`own_pid`], [`permission_denied`] and
+//! [`check_not_withheld`].
 //!
 //! # Withheld contents
 //!
