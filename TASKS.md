@@ -175,10 +175,10 @@ Owns: `chartreuse-platform/src/macos/permissions.rs`, a permission module in the
 
 Owns: `chartreuse-core::display`, `chartreuse-platform/src/macos/displays.rs`
 
-- [ ] Logical ↔ physical conversions for each display and for the global desktop space
-- [ ] Map a point or rect to the display(s) it lies on
-- [ ] Unit tests with mixed scale factors, negative origins, and layouts with gaps
-- [ ] macOS enumeration through `NSScreen` / `CGDisplay*`, with flipped-y handled
+- [x] Logical ↔ physical conversions for each display and for the global desktop space
+- [x] Map a point or rect to the display(s) it lies on
+- [x] Unit tests with mixed scale factors, negative origins, and layouts with gaps
+- [x] macOS enumeration through `NSScreen` / `CGDisplay*`, with flipped-y handled
 
 ### 1E — Imaging
 
