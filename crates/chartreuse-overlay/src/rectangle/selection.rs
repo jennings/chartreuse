@@ -27,7 +27,8 @@ pub enum Phase {
 }
 
 /// Pointer and keyboard input for a [`Selection`], in global logical
-/// coordinates, as each display's overlay reports it.
+/// coordinates. The overlay canvases produce these (see
+/// [`RectangleOverlay`](super::RectangleOverlay)).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Input {
     /// The primary button went down at this point.
