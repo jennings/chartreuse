@@ -259,10 +259,10 @@ Depends on: Stage 0. Owns: `chartreuse-platform/src/macos/{clipboard,dialogs}.rs
 Depends on: 1D. Owns: `chartreuse-platform/src/macos/overlay_style.rs`, overlay window
 setup in `chartreuse-overlay`
 
-- [ ] One borderless iced window per display, placed using the display model
-- [ ] Through the native handle: a window level above the menu bar and Dock, plus
+- [x] One borderless iced window per display, placed using the display model
+- [x] Through the native handle: a window level above the menu bar and Dock, plus
       `canJoinAllSpaces` and `fullScreenAuxiliary`
-- [ ] Verify above full-screen apps and on the active Space
+- [x] Verify above full-screen apps and on the active Space
 
 ### 2D — Rectangle selection canvas
 
