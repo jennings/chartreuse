@@ -165,11 +165,11 @@ Owns: `chartreuse-platform/src/macos/hotkeys.rs`, `crates/chartreuse/src/hotkeys
 
 Owns: `chartreuse-platform/src/macos/permissions.rs`, a permission module in the app crate
 
-- [ ] `CGPreflightScreenCaptureAccess` check at startup and before each capture
-- [ ] `CGRequestScreenCaptureAccess` on first run
-- [ ] A guidance window when permission is missing or revoked (with a link to System
+- [x] `CGPreflightScreenCaptureAccess` check at startup and before each capture
+- [x] `CGRequestScreenCaptureAccess` on first run
+- [x] A guidance window when permission is missing or revoked (with a link to System
       Settings)
-- [ ] Verify the first-run flow after `tccutil reset`
+- [x] Verify the first-run flow after `tccutil reset`
 
 ### 1D — Display model
 
