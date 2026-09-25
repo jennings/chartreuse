@@ -14,8 +14,12 @@
 //! tolerance of a few logical points) into document units before calling the
 //! model.
 
+mod annotation;
+mod document;
 mod geometry;
 mod style;
 
+pub use annotation::{Annotation, AnnotationId, Arrow, ArrowHead, Line, Rectangle, Shape, Text};
+pub use document::Document;
 pub use geometry::{distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector};
 pub use style::{Style, StylePatch};

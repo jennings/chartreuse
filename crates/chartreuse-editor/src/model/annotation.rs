@@ -1,0 +1,521 @@
+//! Annotation kinds, their geometry, and hit-testing.
+//!
+//! # Adding a kind
+//!
+//! Each kind is a struct plus a [`Shape`] variant. Adding one (ellipse, pen,
+//! highlighter, step marker, blur region in 3B) means a new struct, a new
+//! variant, and one arm in each `match` in [`Shape`]'s methods; the compiler
+//! lists every other place (canvas, flatten) that must learn to draw it. Nothing
+//! in the document or undo machinery is kind-specific except text measurement.
+//!
+//! Step markers must not store their number: derive it from the document (the
+//! 1-based rank of the marker's [`AnnotationId`] among the step markers still
+//! present), so deleting or restoring a marker renumbers the rest for free.
+//! Ids increase in creation order and are never reused, and undo restores the
+//! original id, so that rank is stable under reordering and undo.
+
+use super::geometry::{distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector};
+use super::style::Style;
+
+/// A document-unique, stable annotation identifier.
+///
+/// Ids are handed out by [`Document`](super::Document) in increasing order of
+/// creation and are never reused, even after the annotation is deleted or its
+/// creation is undone. They are not z-order; use the annotation's index for
+/// that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AnnotationId(pub(super) u64);
+
+impl AnnotationId {
+    /// The raw value, for logging and debugging.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// One annotation: what it is ([`Shape`]), how it looks ([`Style`]), and its
+/// stable id. Only a [`Document`](super::Document) creates annotations, and it
+/// changes them only through commands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Annotation {
+    id: AnnotationId,
+    pub shape: Shape,
+    pub style: Style,
+}
+
+impl Annotation {
+    pub(super) const fn new(id: AnnotationId, shape: Shape, style: Style) -> Self {
+        Self { id, shape, style }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> AnnotationId {
+        self.id
+    }
+
+    /// True if `point` hits this annotation. See [`Shape::hit`].
+    #[must_use]
+    pub fn hit(&self, point: Point, tolerance: f32) -> bool {
+        self.shape.hit(&self.style, point, tolerance)
+    }
+
+    /// The visual bounds. See [`Shape::bounds`].
+    #[must_use]
+    pub fn bounds(&self) -> Rect {
+        self.shape.bounds(&self.style)
+    }
+}
+
+/// The kind-specific part of an annotation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    Line(Line),
+    Arrow(Arrow),
+    Rectangle(Rectangle),
+    Text(Text),
+}
+
+impl Shape {
+    /// True if `point` hits the shape drawn with `style`.
+    ///
+    /// `tolerance` (document units, negative treated as zero) is extra slack
+    /// around the drawn area so thin strokes are easy to click; the canvas
+    /// divides its screen-space slop by the zoom factor. Per kind:
+    ///
+    /// - Line: within `stroke_width / 2 + tolerance` of the segment (so the hit
+    ///   area has round caps, like the stroke; see [`Style`]).
+    /// - Arrow: as a line along the shaft (`start` to [`ArrowHead::base`]), or
+    ///   within `tolerance` of the filled [`ArrowHead`] triangle.
+    /// - Rectangle: within `stroke_width / 2 + tolerance` of the outline (so
+    ///   the outer corners are rounded, like the stroke's round joins). The
+    ///   interior does not hit, so annotations and image content inside an
+    ///   outline stay clickable. (A future filled rectangle would also hit
+    ///   inside.)
+    /// - Text: inside [`Text::bounds`] grown by `tolerance`.
+    #[must_use]
+    pub fn hit(&self, style: &Style, point: Point, tolerance: f32) -> bool {
+        let tolerance = tolerance.max(0.0);
+        let reach = half_stroke(style) + tolerance;
+        match self {
+            Self::Line(line) => distance_to_segment(point, line.start, line.end) <= reach,
+            Self::Arrow(arrow) => match arrow.head(style.stroke_width) {
+                Some(head) => {
+                    distance_to_segment(point, arrow.start, head.base) <= reach
+                        || distance_to_triangle(point, head.corners()) <= tolerance
+                }
+                None => distance_to_segment(point, arrow.start, arrow.end) <= reach,
+            },
+            Self::Rectangle(rectangle) => rectangle.rect.distance_to_outline(point) <= reach,
+            Self::Text(text) => text
+                .bounds(style.font_size)
+                .expand(tolerance)
+                .contains(point),
+        }
+    }
+
+    /// The smallest rectangle containing everything the shape draws with
+    /// `style`: strokes reach `stroke_width / 2` past their path in every
+    /// direction (round caps and joins; see [`Style`]), arrows include their
+    /// head, text its layout box. Used for selection outlines and marquee
+    /// selection.
+    #[must_use]
+    pub fn bounds(&self, style: &Style) -> Rect {
+        let half = half_stroke(style);
+        match self {
+            Self::Line(line) => Rect::from_corners(line.start, line.end).expand(half),
+            Self::Arrow(arrow) => match arrow.head(style.stroke_width) {
+                Some(head) => Rect::from_corners(arrow.start, head.base)
+                    .expand(half)
+                    .union(&Rect::from_corners(head.left, head.right))
+                    .union(&Rect::from_corners(head.tip, head.tip)),
+                None => Rect::from_corners(arrow.start, arrow.end).expand(half),
+            },
+            Self::Rectangle(rectangle) => rectangle.rect.expand(half),
+            Self::Text(text) => text.bounds(style.font_size),
+        }
+    }
+
+    /// Moves the shape by `delta`.
+    pub fn translate(&mut self, delta: Vector) {
+        match self {
+            Self::Line(line) => {
+                line.start += delta;
+                line.end += delta;
+            }
+            Self::Arrow(arrow) => {
+                arrow.start += delta;
+                arrow.end += delta;
+            }
+            Self::Rectangle(rectangle) => rectangle.rect = rectangle.rect.translate(delta),
+            Self::Text(text) => text.position += delta,
+        }
+    }
+}
+
+fn half_stroke(style: &Style) -> f32 {
+    style.stroke_width.max(0.0) / 2.0
+}
+
+/// A straight line segment, stroked with round caps (see [`Style`]). A
+/// zero-length line draws a dot `stroke_width` across.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    pub start: Point,
+    pub end: Point,
+}
+
+/// A line with an arrowhead at `end`.
+///
+/// The head's geometry comes from [`Arrow::head`] so the canvas, flatten, and
+/// hit-testing agree on it. Renderers stroke the shaft from `start` to
+/// [`ArrowHead::base`] like any stroke (round caps; see [`Style`]), then fill
+/// the head triangle. The head covers the shaft's cap at the base, and ending
+/// the shaft there keeps a thick stroke from poking out past the head's point.
+/// An arrow shorter than its head's full length is all head (`base` is
+/// `start`, so the shaft is a dot there); a zero-length arrow has no head and
+/// draws a dot, like a zero-length line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arrow {
+    pub start: Point,
+    /// The tip.
+    pub end: Point,
+}
+
+impl Arrow {
+    /// Head length per unit of stroke width.
+    pub const HEAD_LENGTH_PER_STROKE: f32 = 3.0;
+    /// The shortest head, so thin arrows still read as arrows.
+    pub const MIN_HEAD_LENGTH: f32 = 10.0;
+    /// Head half-width (tip to either back corner, across) per unit of head
+    /// length.
+    pub const HEAD_HALF_WIDTH_RATIO: f32 = 0.5;
+
+    /// The arrowhead for a given stroke width: length
+    /// `max(stroke_width × HEAD_LENGTH_PER_STROKE, MIN_HEAD_LENGTH)`, capped at the
+    /// arrow's length, and half as wide on each side as it is long. `None` for a
+    /// zero-length arrow, which has no direction.
+    #[must_use]
+    pub fn head(&self, stroke_width: f32) -> Option<ArrowHead> {
+        let along = self.end - self.start;
+        let length = along.length();
+        if length == 0.0 || !length.is_finite() {
+            return None;
+        }
+        let head_length = (stroke_width.max(0.0) * Self::HEAD_LENGTH_PER_STROKE)
+            .max(Self::MIN_HEAD_LENGTH)
+            .min(length);
+        let direction = along * (1.0 / length);
+        let base = self.end - direction * head_length;
+        let across = direction.perpendicular() * (head_length * Self::HEAD_HALF_WIDTH_RATIO);
+        Some(ArrowHead {
+            tip: self.end,
+            base,
+            left: base - across,
+            right: base + across,
+        })
+    }
+}
+
+/// The filled triangle at an arrow's tip.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrowHead {
+    pub tip: Point,
+    /// The midpoint of the back edge, where the shaft ends.
+    pub base: Point,
+    /// The back corners, on either side of `base`.
+    pub left: Point,
+    pub right: Point,
+}
+
+impl ArrowHead {
+    /// `[tip, left, right]`.
+    #[must_use]
+    pub const fn corners(&self) -> [Point; 3] {
+        [self.tip, self.left, self.right]
+    }
+}
+
+/// An unfilled rectangle outline, stroke centered on `rect`'s edges with round
+/// joins, so its outer corners are rounded and its inner ones sharp (see
+/// [`Style`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rectangle {
+    pub rect: Rect,
+}
+
+/// A block of text, one or more lines separated by `\n`.
+///
+/// # Size
+///
+/// Laying out text needs fonts, which the pure model does not have. The canvas
+/// (2E) measures the text it draws and reports it with
+/// [`Document::set_text_size`](super::Document::set_text_size); until then (and
+/// again after anything that changes the layout: the content or the font size)
+/// the size is estimated from the font size. Renderers use a line height of
+/// `font_size × LINE_HEIGHT` so measurements and estimates agree on height.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Text {
+    /// The top-left corner of the layout box.
+    pub position: Point,
+    pub content: String,
+    /// The measured layout size for the current content and font size, if the
+    /// canvas has reported one. Never stale: cleared whenever the layout could
+    /// change.
+    measured: Option<Size>,
+}
+
+impl Text {
+    /// Line height per unit of font size, for rendering and estimates.
+    pub const LINE_HEIGHT: f32 = 1.2;
+    /// Estimated average glyph advance per unit of font size.
+    pub const ESTIMATED_ADVANCE: f32 = 0.6;
+
+    #[must_use]
+    pub fn new(position: Point, content: impl Into<String>) -> Self {
+        Self {
+            position,
+            content: content.into(),
+            measured: None,
+        }
+    }
+
+    /// The measured size, if the canvas has reported one for the current
+    /// content and font size.
+    #[must_use]
+    pub const fn measured(&self) -> Option<Size> {
+        self.measured
+    }
+
+    pub(super) fn set_measured(&mut self, size: Option<Size>) {
+        self.measured = size;
+    }
+
+    /// The layout size: measured if known, otherwise [`Text::estimate_size`].
+    #[must_use]
+    pub fn size(&self, font_size: f32) -> Size {
+        self.measured
+            .unwrap_or_else(|| Self::estimate_size(&self.content, font_size))
+    }
+
+    /// The layout box: `position` and [`Text::size`].
+    #[must_use]
+    pub fn bounds(&self, font_size: f32) -> Rect {
+        Rect::new(self.position, self.size(font_size))
+    }
+
+    /// A font-free size estimate: the longest line's character count ×
+    /// `ESTIMATED_ADVANCE × font_size` wide, and the line count (at least one,
+    /// so empty text still has a caret-high box) × `LINE_HEIGHT × font_size`
+    /// tall.
+    #[must_use]
+    pub fn estimate_size(content: &str, font_size: f32) -> Size {
+        let font_size = font_size.max(0.0);
+        let (lines, longest) = content
+            .split('\n')
+            .fold((0_u16, 0_usize), |(lines, longest), line| {
+                (lines.saturating_add(1), longest.max(line.chars().count()))
+            });
+        // Precision loss only past 2^24 characters, far beyond any annotation.
+        let longest = longest as f32;
+        Size::new(
+            longest * Self::ESTIMATED_ADVANCE * font_size,
+            f32::from(lines) * Self::LINE_HEIGHT * font_size,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn style(stroke_width: f32) -> Style {
+        Style {
+            stroke_width,
+            ..Style::default()
+        }
+    }
+
+    fn line(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
+        Shape::Line(Line {
+            start: Point::new(ax, ay),
+            end: Point::new(bx, by),
+        })
+    }
+
+    fn arrow(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
+        Shape::Arrow(Arrow {
+            start: Point::new(ax, ay),
+            end: Point::new(bx, by),
+        })
+    }
+
+    #[test]
+    fn line_hit_reaches_half_the_stroke_plus_tolerance() {
+        let shape = line(0.0, 0.0, 100.0, 0.0);
+        let style = style(4.0);
+        // Half stroke 2 + tolerance 3 = 5.
+        assert!(shape.hit(&style, Point::new(50.0, 5.0), 3.0));
+        assert!(!shape.hit(&style, Point::new(50.0, 5.01), 3.0));
+        assert!(shape.hit(&style, Point::new(50.0, -2.0), 0.0));
+        assert!(!shape.hit(&style, Point::new(50.0, -2.01), 0.0));
+    }
+
+    #[test]
+    fn line_hit_area_has_round_caps() {
+        let shape = line(0.0, 0.0, 100.0, 0.0);
+        let style = style(2.0);
+        // Reach is 1 + 4 = 5 from the endpoint (3-4-5 triangle).
+        assert!(shape.hit(&style, Point::new(103.0, 4.0), 4.0));
+        assert!(!shape.hit(&style, Point::new(103.0, 4.1), 4.0));
+    }
+
+    #[test]
+    fn negative_tolerance_counts_as_zero() {
+        let shape = line(0.0, 0.0, 100.0, 0.0);
+        assert!(shape.hit(&style(4.0), Point::new(50.0, 2.0), -10.0));
+    }
+
+    #[test]
+    fn arrow_head_has_documented_proportions() {
+        let Shape::Arrow(a) = arrow(0.0, 0.0, 100.0, 0.0) else {
+            unreachable!()
+        };
+        // Thin strokes use the minimum length.
+        let thin = a.head(1.0).unwrap();
+        assert_eq!(thin.tip, Point::new(100.0, 0.0));
+        assert_eq!(thin.base, Point::new(90.0, 0.0));
+        assert_eq!(thin.left.x, 90.0);
+        assert_eq!((thin.left.y - thin.right.y).abs(), 10.0);
+        // Thick strokes scale it.
+        let thick = a.head(8.0).unwrap();
+        assert_eq!(thick.base, Point::new(76.0, 0.0));
+        // Short arrows cap it at their length.
+        let Shape::Arrow(short) = arrow(0.0, 0.0, 4.0, 0.0) else {
+            unreachable!()
+        };
+        assert_eq!(short.head(8.0).unwrap().base, Point::ORIGIN);
+        // A zero-length arrow has no direction and no head.
+        let Shape::Arrow(dot) = arrow(5.0, 5.0, 5.0, 5.0) else {
+            unreachable!()
+        };
+        assert_eq!(dot.head(8.0), None);
+    }
+
+    #[test]
+    fn arrow_hits_its_head_beyond_the_shaft() {
+        let arrow = arrow(0.0, 0.0, 100.0, 0.0);
+        let style = style(2.0);
+        // Head: length 10, back corners at (90, ±5). A point at (92, 3) is
+        // inside the head but 3 away from the shaft (reach 1).
+        let beside_head = Point::new(92.0, 3.0);
+        assert!(arrow.hit(&style, beside_head, 0.0));
+        assert!(!line(0.0, 0.0, 100.0, 0.0).hit(&style, beside_head, 0.0));
+        // Beside the shaft, away from the head, it misses.
+        assert!(!arrow.hit(&style, Point::new(50.0, 3.0), 0.0));
+        // Just outside a back corner: within tolerance hits, beyond misses.
+        assert!(arrow.hit(&style, Point::new(90.0, 6.0), 1.0));
+        assert!(!arrow.hit(&style, Point::new(90.0, 6.5), 1.0));
+    }
+
+    #[test]
+    fn zero_length_arrow_hits_like_a_dot() {
+        let dot = arrow(5.0, 5.0, 5.0, 5.0);
+        assert!(dot.hit(&style(4.0), Point::new(7.0, 5.0), 0.0));
+        assert!(!dot.hit(&style(4.0), Point::new(7.1, 5.0), 0.0));
+    }
+
+    #[test]
+    fn rectangle_hits_its_outline_but_not_its_interior() {
+        let shape = Shape::Rectangle(Rectangle {
+            rect: Rect::from_corners(Point::new(10.0, 10.0), Point::new(110.0, 60.0)),
+        });
+        let style = style(4.0);
+        // On each edge.
+        for p in [(60.0, 10.0), (110.0, 35.0), (60.0, 60.0), (10.0, 35.0)] {
+            assert!(shape.hit(&style, Point::new(p.0, p.1), 0.0), "{p:?}");
+        }
+        // Inside, the stroke reaches 2 + tolerance 1 inward.
+        assert!(shape.hit(&style, Point::new(13.0, 35.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(13.1, 35.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(60.0, 35.0), 1.0));
+        // Outside, likewise outward, with round corners.
+        assert!(shape.hit(&style, Point::new(60.0, 7.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(60.0, 6.9), 1.0));
+        assert!(shape.hit(&style, Point::new(112.0, 62.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(113.0, 63.0), 1.0));
+    }
+
+    #[test]
+    fn text_estimate_uses_longest_line_and_line_count() {
+        let size = Text::estimate_size("ab\nabcd\n", 10.0);
+        assert_eq!(size.width, 4.0 * 0.6 * 10.0);
+        assert_eq!(size.height, 3.0 * 1.2 * 10.0);
+        let empty = Text::estimate_size("", 10.0);
+        assert_eq!(empty.width, 0.0);
+        assert_eq!(empty.height, 12.0);
+        // Characters, not bytes.
+        assert_eq!(Text::estimate_size("éé", 10.0).width, 12.0);
+    }
+
+    #[test]
+    fn text_hits_its_box_grown_by_tolerance() {
+        let text = Text::new(Point::new(10.0, 20.0), "hello");
+        let style = Style {
+            font_size: 10.0,
+            ..Style::default()
+        };
+        // Estimated box: (10, 20) to (40, 32).
+        let shape = Shape::Text(text.clone());
+        assert!(shape.hit(&style, Point::new(25.0, 25.0), 0.0));
+        assert!(shape.hit(&style, Point::new(40.0, 32.0), 0.0));
+        assert!(!shape.hit(&style, Point::new(40.5, 32.0), 0.0));
+        assert!(shape.hit(&style, Point::new(42.0, 32.0), 2.0));
+        assert!(!shape.hit(&style, Point::new(10.0, 17.9), 2.0));
+
+        // A measured size replaces the estimate.
+        let mut measured = text;
+        measured.set_measured(Some(Size::new(50.0, 12.0)));
+        let shape = Shape::Text(measured);
+        assert!(shape.hit(&style, Point::new(59.0, 25.0), 0.0));
+        assert!(!shape.hit(&style, Point::new(61.0, 25.0), 0.0));
+    }
+
+    #[test]
+    fn bounds_include_stroke_and_arrowhead() {
+        let style = style(4.0);
+        assert_eq!(
+            line(10.0, 10.0, 30.0, 10.0).bounds(&style),
+            Rect::from_corners(Point::new(8.0, 8.0), Point::new(32.0, 12.0))
+        );
+        // Head length 12, half-width 6: wider than the stroke.
+        assert_eq!(
+            arrow(0.0, 0.0, 100.0, 0.0).bounds(&style),
+            Rect::from_corners(Point::new(-2.0, -6.0), Point::new(100.0, 6.0))
+        );
+    }
+
+    #[test]
+    fn translate_moves_every_point_of_every_kind() {
+        let delta = Vector::new(3.0, -2.0);
+        let rect = Rect::from_corners(Point::ORIGIN, Point::new(4.0, 4.0));
+        let cases = [
+            (line(0.0, 0.0, 1.0, 1.0), line(3.0, -2.0, 4.0, -1.0)),
+            (arrow(0.0, 0.0, 1.0, 1.0), arrow(3.0, -2.0, 4.0, -1.0)),
+            (
+                Shape::Rectangle(Rectangle { rect }),
+                Shape::Rectangle(Rectangle {
+                    rect: rect.translate(delta),
+                }),
+            ),
+            (
+                Shape::Text(Text::new(Point::ORIGIN, "x")),
+                Shape::Text(Text::new(Point::new(3.0, -2.0), "x")),
+            ),
+        ];
+        for (mut shape, expected) in cases {
+            shape.translate(delta);
+            assert_eq!(shape, expected);
+        }
+    }
+}
