@@ -1,5 +1,8 @@
 # Agent instructions
 
+- PLAN.md contains a description of this project
+- TASKS.md contains an implementation plan
+
 ## Commits
 
 - Every commit must build and pass all tests.
