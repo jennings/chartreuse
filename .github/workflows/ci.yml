@@ -1,0 +1,39 @@
+# Every step after checkout and toolchain installation is a `cargo xtask`
+# command, so CI can be reproduced locally. Add new CI needs to the xtask first.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - run: cargo xtask check
+      # Ad-hoc signed: CI has no signing identity.
+      - run: cargo xtask bundle
+
+  check:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu
+            os: ubuntu-latest
+          - name: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      # Keeps the `Unsupported` backends compiling until the ports land.
+      - run: cargo xtask check

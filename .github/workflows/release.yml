@@ -1,0 +1,26 @@
+# Builds a release with `cargo xtask release` and uploads its output. Signing
+# credentials (and `cargo xtask ci-keychain`) are added in track 5A; until then
+# the run fails, naming the missing environment variable.
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - run: cargo xtask release
+        env:
+          CHARTREUSE_RELEASE_SIGN_IDENTITY: ${{ secrets.CHARTREUSE_RELEASE_SIGN_IDENTITY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chartreuse-macos
+          path: target/dist/
+          if-no-files-found: error
