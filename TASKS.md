@@ -129,10 +129,10 @@ place, so that Stage 1 agents can work without editing each other's code.
   - [x] A theme built from the flavor's accent color
   - [x] `tracing` logging to stderr
 - [x] README: development setup (certificate, env var, `cargo xtask run`)
-- [ ] Verify
+- [x] Verify
   - [x] `cargo xtask run` opens a blank window with the yellow accent and no Dock icon
   - [x] `cargo xtask release` produces a green-accent `Chartreuse.app`
-  - [ ] CI is green on all three runners (not run yet: the repository has no remote)
+  - [x] CI is green on all three runners
 
 **Gate:** everything above is merged. From here on, agents work in parallel.
 
