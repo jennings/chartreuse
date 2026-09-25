@@ -4,12 +4,15 @@
 //! Owned by track 1E.
 //!
 //! - [`region`]: crop and copy rectangles in physical pixels.
+//! - [`codec`]: encode and decode PNG, JPEG, WebP, GIF, BMP, and TIFF files.
 //! - [`composite`]: combine per-display captures into one image on a
 //!   [`PixelGrid`](chartreuse_core::display::PixelGrid) of the desktop or of a
 //!   selection.
 
+pub mod codec;
 pub mod composite;
 pub mod region;
 
+pub use codec::{decode, decode_file, encode, Format};
 pub use composite::{composite_at, Composite};
 pub use region::{copy_region, crop};

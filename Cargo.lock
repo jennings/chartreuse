@@ -600,6 +600,7 @@ name = "chartreuse-imaging"
 version = "0.1.0"
 dependencies = [
  "chartreuse-core",
+ "image",
 ]
 
 [[package]]

@@ -10,6 +10,16 @@ publish.workspace = true
 
 [dependencies]
 chartreuse-core.workspace = true
+# Only the formats `codec::Format` lists. iced also depends on `image` (with its
+# default formats), so this adds no new crate to the build.
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "tiff",
+    "webp",
+] }
 
 [lints]
 workspace = true
