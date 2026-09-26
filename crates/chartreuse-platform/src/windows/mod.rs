@@ -29,6 +29,10 @@ mod status_item;
 #[cfg(windows)]
 mod window_list;
 
+mod layout;
+#[cfg(windows)]
+mod util;
+
 #[cfg(windows)]
 use std::sync::Arc;
 
