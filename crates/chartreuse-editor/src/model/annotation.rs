@@ -79,6 +79,9 @@ pub enum Shape {
     Ellipse(Ellipse),
     /// A freehand pen stroke.
     Pen(Polyline),
+    /// A freehand highlighter stroke: wide and translucent; see
+    /// [`highlighter`].
+    Highlighter(Polyline),
     Text(Text),
 }
 
@@ -101,6 +104,8 @@ impl Shape {
     /// - Ellipse: within `stroke_width / 2 + tolerance` of the outline
     ///   ([`distance_to_ellipse`]); like a rectangle, not inside.
     /// - Pen: within `stroke_width / 2 + tolerance` of the path.
+    /// - Highlighter: within [`highlighter::width`]` / 2 + tolerance` of the
+    ///   path.
     /// - Text: inside [`Text::bounds`] grown by `tolerance`.
     #[must_use]
     pub fn hit(&self, style: &Style, point: Point, tolerance: f32) -> bool {
@@ -118,6 +123,10 @@ impl Shape {
             Self::Rectangle(rectangle) => rectangle.rect.distance_to_outline(point) <= reach,
             Self::Ellipse(ellipse) => distance_to_ellipse(point, ellipse.rect) <= reach,
             Self::Pen(pen) => distance_to_polyline(point, &pen.points) <= reach,
+            Self::Highlighter(stroke) => {
+                distance_to_polyline(point, &stroke.points)
+                    <= highlighter::width(style) / 2.0 + tolerance
+            }
             Self::Text(text) => text
                 .bounds(style.font_size)
                 .expand(tolerance)
@@ -145,6 +154,9 @@ impl Shape {
             Self::Rectangle(rectangle) => rectangle.rect.expand(half),
             Self::Ellipse(ellipse) => ellipse.rect.expand(half),
             Self::Pen(pen) => pen.path_bounds().expand(half),
+            Self::Highlighter(stroke) => {
+                stroke.path_bounds().expand(highlighter::width(style) / 2.0)
+            }
             Self::Text(text) => text.bounds(style.font_size),
         }
     }
@@ -162,7 +174,7 @@ impl Shape {
             }
             Self::Rectangle(rectangle) => rectangle.rect = rectangle.rect.translate(delta),
             Self::Ellipse(ellipse) => ellipse.rect = ellipse.rect.translate(delta),
-            Self::Pen(pen) => pen.translate(delta),
+            Self::Pen(stroke) | Self::Highlighter(stroke) => stroke.translate(delta),
             Self::Text(text) => text.position += delta,
         }
     }
@@ -170,6 +182,45 @@ impl Shape {
 
 fn half_stroke(style: &Style) -> f32 {
     style.stroke_width.max(0.0) / 2.0
+}
+
+pub mod highlighter {
+    //! How a [`Shape::Highlighter`](super::Shape::Highlighter) draws its
+    //! [`Polyline`](super::Polyline): like a pen stroke (round caps and
+    //! joins), but [`WIDTH_PER_STROKE`] times as wide as the style's
+    //! `stroke_width`, and translucent.
+    //!
+    //! # Translucency
+    //!
+    //! The stroke is drawn as a whole at full opacity in the style's color
+    //! into a layer of its own, and that layer is composited over what lies
+    //! beneath it at [`alpha`]: the color's own alpha times [`OPACITY`]. So a
+    //! stroke that crosses itself, or whose joins overlap, is one even tint,
+    //! never darker where it overlaps; two separate highlighter strokes do
+    //! darken where they cross, like real highlighter ink. The canvas and
+    //! flatten both render it this way, with the same rasterizer, so they
+    //! agree.
+
+    use super::Style;
+
+    /// The stroke's width per unit of the style's `stroke_width`.
+    pub const WIDTH_PER_STROKE: f32 = 4.0;
+
+    /// The opacity the stroke's layer is composited at, times the color's
+    /// own alpha.
+    pub const OPACITY: f32 = 0.4;
+
+    /// The stroke's width in document units (never negative).
+    #[must_use]
+    pub fn width(style: &Style) -> f32 {
+        style.stroke_width.max(0.0) * WIDTH_PER_STROKE
+    }
+
+    /// The opacity (0 to 1) the stroke's layer is composited at.
+    #[must_use]
+    pub fn alpha(style: &Style) -> f32 {
+        f32::from(style.color.a) / 255.0 * OPACITY
+    }
 }
 
 /// A straight line segment, stroked with round caps (see [`Style`]). A
@@ -656,6 +707,20 @@ mod tests {
     }
 
     #[test]
+    fn a_highlighter_reaches_its_wider_width() {
+        let points = vec![Point::new(0.0, 0.0), Point::new(40.0, 0.0)];
+        let shape = Shape::Highlighter(Polyline { points });
+        // Stroke width 3 draws 12 wide: a reach of 6 + tolerance 1.
+        let style = style(3.0);
+        assert!(shape.hit(&style, Point::new(20.0, 7.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(20.0, 7.1), 1.0));
+        assert_eq!(
+            shape.bounds(&style),
+            Rect::from_corners(Point::new(-6.0, -6.0), Point::new(46.0, 6.0))
+        );
+    }
+
+    #[test]
     fn translate_moves_every_point_of_every_kind() {
         let delta = Vector::new(3.0, -2.0);
         let rect = Rect::from_corners(Point::ORIGIN, Point::new(4.0, 4.0));
@@ -677,6 +742,14 @@ mod tests {
             (
                 pen(&[(0.0, 0.0), (1.0, 5.0)]),
                 pen(&[(3.0, -2.0), (4.0, 3.0)]),
+            ),
+            (
+                Shape::Highlighter(Polyline {
+                    points: vec![Point::ORIGIN],
+                }),
+                Shape::Highlighter(Polyline {
+                    points: vec![Point::new(3.0, -2.0)],
+                }),
             ),
             (
                 Shape::Text(Text::new(Point::ORIGIN, "x")),

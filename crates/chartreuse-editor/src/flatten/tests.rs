@@ -208,6 +208,58 @@ fn translucent_colors_blend_source_over_in_straight_alpha() {
 }
 
 #[test]
+fn a_highlighter_is_one_even_tint_where_it_overlaps_itself() {
+    let white = Image::filled(PhysicalSize::new(40, 40), Rgba8::rgb(255, 255, 255));
+    let highlight = |points: &[(f32, f32)]| {
+        (
+            Shape::Highlighter(Polyline {
+                points: points.iter().map(|&(x, y)| Point::new(x, y)).collect(),
+            }),
+            // 12 wide.
+            style(BLUE, 3.0),
+        )
+    };
+    // A "Z" folded back over itself: the stroke crosses itself at (20, 20)
+    // and its joins overlap.
+    let crossing = flattened(
+        white.clone(),
+        [highlight(&[
+            (2.0, 2.0),
+            (38.0, 38.0),
+            (38.0, 2.0),
+            (2.0, 38.0),
+        ])],
+    );
+    let once = crossing.pixel(10, 10).unwrap();
+    // White under blue at 40%, to within rounding.
+    let tint = |c: u8| 255.0 * (1.0 - 0.4) + f32::from(c) * 0.4;
+    for (got, want) in
+        once.to_array()
+            .into_iter()
+            .zip([tint(BLUE.r), tint(BLUE.g), tint(BLUE.b), 255.0])
+    {
+        assert!((f32::from(got) - want).abs() <= 1.5, "{once:?}");
+    }
+    assert_eq!(
+        crossing.pixel(20, 20).unwrap(),
+        once,
+        "not darker where it crosses"
+    );
+    assert_eq!(crossing.pixel(37, 37).unwrap(), once, "nor at the joins");
+
+    // Two strokes are two coats.
+    let two = flattened(
+        white,
+        [
+            highlight(&[(2.0, 2.0), (38.0, 38.0)]),
+            highlight(&[(38.0, 2.0), (2.0, 38.0)]),
+        ],
+    );
+    assert_eq!(two.pixel(10, 10).unwrap(), once);
+    assert_ne!(two.pixel(20, 20).unwrap(), once);
+}
+
+#[test]
 fn later_annotations_are_drawn_over_earlier_ones() {
     let image = base(20, 20);
     let green = Rgba8::rgb(0, 200, 0);
@@ -428,6 +480,18 @@ mod canvas {
             4.0,
             &wave(20.0, 200.0, 280.0, 12.0),
         );
+        // A highlighter looping back over itself and across the first line.
+        let mut loop_back = wave(30.0, 170.0, 60.0, 25.0);
+        loop_back.extend(wave(170.0, 40.0, 70.0, -20.0));
+        stroke(&mut editor, ToolKind::Highlighter, yellow, 5.0, &loop_back);
+        // And one clipped by the image's bottom-right corner.
+        stroke(
+            &mut editor,
+            ToolKind::Highlighter,
+            Rgba8::rgb(10, 132, 255),
+            4.0,
+            &wave(320.0, 396.0, 292.0, 5.0),
+        );
 
         editor.update(Message::Color(Rgba8::rgb(250, 250, 250)));
         editor.update(Message::FontSize(30.0));
@@ -446,7 +510,7 @@ mod canvas {
             at(140.0, 200.0),
             at(380.0, 230.0),
         );
-        assert_eq!(editor.document().annotations().len(), 7);
+        assert_eq!(editor.document().annotations().len(), 9);
 
         let flat = flatten(editor.document()).unwrap();
         let canvas = canvas_image(&editor);

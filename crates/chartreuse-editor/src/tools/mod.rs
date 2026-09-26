@@ -32,6 +32,7 @@ mod drag;
 mod ellipse;
 mod freehand;
 mod handles;
+mod highlighter;
 mod line;
 mod pen;
 mod rectangle;
@@ -49,6 +50,7 @@ pub use drag::{DragShape, DragTool};
 pub use ellipse::EllipseTool;
 pub use freehand::{FreehandShape, FreehandTool};
 pub use handles::{handle_at, handles, reshaped, Handle, HANDLE_REACH, HANDLE_SIZE};
+pub use highlighter::HighlighterTool;
 pub use line::LineTool;
 pub use pen::PenTool;
 pub use rectangle::RectangleTool;
@@ -73,18 +75,20 @@ pub enum ToolKind {
     Rectangle,
     Ellipse,
     Pen,
+    Highlighter,
     Text,
 }
 
 impl ToolKind {
     /// Every kind, in toolbar order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Select,
         Self::Line,
         Self::Arrow,
         Self::Rectangle,
         Self::Ellipse,
         Self::Pen,
+        Self::Highlighter,
         Self::Text,
     ];
 
@@ -98,6 +102,7 @@ impl ToolKind {
             Self::Rectangle => "Rectangle",
             Self::Ellipse => "Ellipse",
             Self::Pen => "Pen",
+            Self::Highlighter => "Highlighter",
             Self::Text => "Text",
         }
     }
@@ -112,6 +117,7 @@ impl ToolKind {
             Self::Rectangle => 'r',
             Self::Ellipse => 'e',
             Self::Pen => 'p',
+            Self::Highlighter => 'h',
             Self::Text => 't',
         }
     }
@@ -138,6 +144,7 @@ impl ToolKind {
             Self::Rectangle => Box::<RectangleTool>::default(),
             Self::Ellipse => Box::<EllipseTool>::default(),
             Self::Pen => Box::<PenTool>::default(),
+            Self::Highlighter => Box::<HighlighterTool>::default(),
             Self::Text => Box::<TextTool>::default(),
         }
     }

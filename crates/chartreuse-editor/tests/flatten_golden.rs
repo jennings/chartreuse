@@ -240,6 +240,34 @@ fn pen_strokes() {
 }
 
 #[test]
+fn highlighters() {
+    let highlight = |points: &[(f32, f32)]| {
+        Shape::Highlighter(Polyline {
+            points: points.iter().map(|&(x, y)| Point::new(x, y)).collect(),
+        })
+    };
+    let image = flattened(
+        base(112, 72),
+        [
+            (text(6.0, 8.0, "Mark"), text_style(RED, 24.0)),
+            // Over the text, folding back over itself: one even tint.
+            (
+                highlight(&[(6.0, 22.0), (66.0, 22.0), (60.0, 30.0), (10.0, 30.0)]),
+                style(YELLOW, 3.0),
+            ),
+            // A second stroke across it is a second coat.
+            (highlight(&[(90.0, 6.0), (40.0, 66.0)]), style(BLUE, 2.0)),
+            // A translucent color is fainter still, and a dot is round.
+            (
+                highlight(&[(96.0, 56.0)]),
+                style(Rgba8::new(52, 199, 89, 128), 5.0),
+            ),
+        ],
+    );
+    check("highlighter", &image);
+}
+
+#[test]
 fn text_annotations() {
     let image = flattened(
         base(176, 80),

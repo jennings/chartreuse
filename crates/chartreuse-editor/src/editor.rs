@@ -35,6 +35,11 @@ pub enum Message {
     /// Deletes the selected annotations.
     Delete,
     Zoom(ZoomChange),
+    /// The window's scale factor changed (or became known): device pixels
+    /// per logical pixel. The canvas sends it when the window reports a
+    /// change; not every platform reports the initial one, so the owner
+    /// sends that when the window opens (`iced::window::scale_factor`).
+    ScaleFactor(f32),
 }
 
 /// A zoom command, applied around the canvas's center.
@@ -79,6 +84,9 @@ pub struct Editor {
     modifiers: keyboard::Modifiers,
     /// The pointer's latest canvas position while the button is down.
     pointer: Option<iced::Point>,
+    /// Device pixels per canvas pixel: the window's scale factor, which
+    /// highlighters are rasterized at.
+    scale_factor: f32,
 }
 
 impl Editor {
@@ -99,6 +107,7 @@ impl Editor {
             canvas,
             modifiers: keyboard::Modifiers::default(),
             pointer: None,
+            scale_factor: 1.0,
         }
     }
 
@@ -171,6 +180,12 @@ impl Editor {
                 self.zoom_by(change);
                 None
             }
+            Message::ScaleFactor(scale_factor) => {
+                if scale_factor.is_finite() && scale_factor > 0.0 {
+                    self.scale_factor = scale_factor;
+                }
+                None
+            }
         };
         self.measure_text();
         event
@@ -199,6 +214,10 @@ impl Editor {
 
     pub(crate) const fn canvas_size(&self) -> iced::Size {
         self.canvas
+    }
+
+    pub(crate) const fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 
     /// The mapping for a canvas of `size`.

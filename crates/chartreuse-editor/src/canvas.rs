@@ -12,9 +12,9 @@
 //! it):
 //!
 //! 1. the background and the base image;
-//! 2. the annotations, split into runs in z-order such that a run's shapes
-//!    all come before its text (see [`runs`]), one layer per run, so every
-//!    annotation is drawn above the ones below it;
+//! 2. the annotations, split into runs in z-order such that within a run
+//!    meshes come before images and images before text (see [`runs`]), one
+//!    layer per run, so every annotation is drawn above the ones below it;
 //! 3. the overlay: the active tool's preview and any selection chrome. This
 //!    top layer is also the one that handles input.
 //!
@@ -23,8 +23,9 @@
 //!
 //! The base and annotation layers keep their geometry and redraw only when
 //! what they show changes: the image, the view, the canvas size, the theme,
-//! a run's annotations, or a preview of one of them. A pointer move in a
-//! gesture that changes nothing else redraws only the overlay.
+//! the window's scale factor (for highlighters), a run's annotations, or a
+//! preview of one of them. A pointer move in a gesture that changes nothing
+//! else redraws only the overlay.
 //!
 //! The zoom and pan are a [`View`], mapped to canvas coordinates by a
 //! [`Viewport`].
@@ -46,6 +47,18 @@
 //!   one of zero size is a dot.
 //! - A pen stroke is the open path through its points; one whose points all
 //!   coincide is a dot.
+//! - A highlighter stroke is a raster image: the same layer flatten
+//!   composites (drawn by `flatten::highlighter_layer`, the stroke at full
+//!   opacity), rasterized at device resolution (`scale` × the window's scale
+//!   factor, one image pixel per device pixel, so it is as sharp as the
+//!   strokes and text around it on a high-DPI display) over the whole device
+//!   pixels the stroke covers in the visible part of the image, and drawn at
+//!   [`highlighter::alpha`] opacity, so it never darkens where it overlaps
+//!   itself and matches the export. (Canvas meshes can't do that: iced
+//!   tessellates a stroke into triangles that overlap at joins and
+//!   crossings.) The editor learns the scale factor from
+//!   [`Message::ScaleFactor`], which the canvas sends when the window's
+//!   changes.
 //! - Text is iced canvas text: shaped by cosmic-text and rasterized by the
 //!   renderer's glyph cache, in [`font::FONT`], at `font_size` with a line
 //!   height of `font_size × Text::LINE_HEIGHT` (both × `scale`), the layout
@@ -59,6 +72,7 @@
 //! [`ArrowHead::base`]: crate::model::ArrowHead::base
 //! [`Rect::corners`]: crate::model::Rect::corners
 //! [`Ellipse::curves`]: crate::model::Ellipse::curves
+//! [`highlighter::alpha`]: crate::model::highlighter::alpha
 //! [`font::FONT`]: crate::font::FONT
 //! [`font::layout`]: crate::font::layout
 
@@ -74,7 +88,9 @@ use iced::advanced::mouse::{self, click, Interaction};
 use iced::widget::canvas::{self as iced_canvas, Action, Event, Frame, Geometry, Program};
 use iced::widget::image::FilterMethod;
 use iced::widget::{space, stack, Canvas};
-use iced::{keyboard, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
+use iced::{
+    keyboard, window, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, Vector,
+};
 use smol_str::SmolStr;
 
 use crate::editor::Message;
@@ -149,17 +165,17 @@ pub(crate) fn view(editor: &Editor) -> Element<'_, Message> {
     .into()
 }
 
-/// Splits annotations (bottom to top) into consecutive runs in which no shape
-/// comes after text, so drawing each run as one layer (text last) keeps the
-/// z-order.
+/// Splits annotations (bottom to top) into consecutive runs that one layer
+/// can draw in z-order: iced draws a layer's meshes, then its images, then
+/// its text, so a run never has an annotation drawing an earlier kind of
+/// [`Primitive`] than the one below it last drew (a shape after text, or
+/// after a highlighter).
 #[must_use]
 pub fn runs(annotations: &[Annotation]) -> Vec<Range<usize>> {
     let mut runs = Vec::new();
     let mut start = 0;
     for (index, pair) in annotations.windows(2).enumerate() {
-        let text_then_shape =
-            matches!(pair[0].shape, Shape::Text(_)) && !matches!(pair[1].shape, Shape::Text(_));
-        if text_then_shape {
+        if Primitive::last(&pair[0].shape) > Primitive::first(&pair[1].shape) {
             runs.push(start..index + 1);
             start = index + 1;
         }
@@ -168,6 +184,35 @@ pub fn runs(annotations: &[Annotation]) -> Vec<Range<usize>> {
         runs.push(start..annotations.len());
     }
     runs
+}
+
+/// The kinds of thing an annotation draws, in the order iced draws them
+/// within a layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Primitive {
+    /// Strokes and fills.
+    Mesh,
+    /// Raster images (a highlighter's layer).
+    Image,
+    Text,
+}
+
+impl Primitive {
+    /// The kind of primitive `shape` draws first.
+    #[must_use]
+    pub const fn first(shape: &Shape) -> Self {
+        match shape {
+            Shape::Highlighter(_) => Self::Image,
+            Shape::Text(_) => Self::Text,
+            _ => Self::Mesh,
+        }
+    }
+
+    /// The kind of primitive `shape` draws last.
+    #[must_use]
+    pub const fn last(shape: &Shape) -> Self {
+        Self::first(shape)
+    }
 }
 
 /// One layer of the canvas.
@@ -221,6 +266,9 @@ enum Content<'a> {
     Annotations {
         viewport: Viewport,
         annotations: Cow<'a, [Annotation]>,
+        /// Device pixels per canvas pixel, which highlighters are rasterized
+        /// at.
+        scale_factor: f32,
     },
 }
 
@@ -239,9 +287,11 @@ impl Content<'_> {
             Content::Annotations {
                 viewport,
                 annotations,
+                scale_factor,
             } => Content::Annotations {
                 viewport,
                 annotations: Cow::Owned(annotations.into_owned()),
+                scale_factor,
             },
         }
     }
@@ -359,25 +409,38 @@ impl Scene<'_> {
         preview: &Preview<'_>,
     ) {
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
+        let raster = self.raster(frame.size(), clip);
         frame.with_clip(clip, |frame| {
             for annotation in annotations {
                 if let Some(shape) = displayed(annotation, preview) {
-                    render::shape(frame, viewport, &shape, &annotation.style);
+                    render::shape(frame, viewport, raster, &shape, &annotation.style);
                 }
             }
         });
     }
 
+    /// How annotations' raster parts are rendered on a canvas of `size` whose
+    /// annotations are clipped to `clip`.
+    fn raster(&self, size: Size, clip: Rectangle) -> render::Raster {
+        render::Raster {
+            visible: Rectangle::with_size(size)
+                .intersection(&clip)
+                .unwrap_or_default(),
+            scale_factor: self.editor.scale_factor(),
+        }
+    }
+
     fn draw_overlay(&self, frame: &mut Frame, theme: &Theme) {
         let viewport = self.editor.viewport(frame.size());
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
+        let raster = self.raster(frame.size(), clip);
         let accent = theme.palette().primary;
         let preview = self.editor.active_tool().preview();
         self.draw_selection(frame, &viewport, &preview, accent);
         match preview {
             Preview::None | Preview::Moved(..) | Preview::Reshaped(..) => {}
             Preview::New(shape) => frame.with_clip(clip, |frame| {
-                render::shape(frame, &viewport, &shape, &self.editor.style());
+                render::shape(frame, &viewport, raster, &shape, &self.editor.style());
             }),
             Preview::Text(edit) => {
                 let style = edit.style();
@@ -469,6 +532,9 @@ impl Program<Message> for Scene<'_> {
         let Layer::Overlay = self.layer else {
             return None;
         };
+        if let Event::Window(window::Event::Rescaled(scale_factor)) = event {
+            return Some(Action::publish(Message::ScaleFactor(*scale_factor)));
+        }
         let kind = self.input(&mut state.tracking, event, bounds, cursor)?;
         let captures = !matches!(kind, InputKind::Resized | InputKind::Modifiers(_));
         let action = Action::publish(Message::Canvas(Input {
@@ -513,6 +579,7 @@ impl Program<Message> for Scene<'_> {
                     .then_some(Content::Annotations {
                         viewport,
                         annotations: Cow::Borrowed(annotations),
+                        scale_factor: self.editor.scale_factor(),
                     });
                 state.drawing.draw(renderer, size, content, |frame| {
                     self.draw_annotations(frame, &viewport, annotations, &preview);
@@ -559,7 +626,7 @@ mod tests {
 
     use super::*;
     use crate::editor::testing;
-    use crate::model::{Arrow, Document, Line, Point as DocPoint, Style, Text};
+    use crate::model::{Arrow, Document, Line, Point as DocPoint, Polyline, Style, Text};
     use crate::tools::ToolKind;
 
     fn document(kinds: &str) -> Document {
@@ -570,6 +637,9 @@ mod tests {
         for kind in kinds.chars() {
             let shape = match kind {
                 't' => Shape::Text(Text::new(DocPoint::ORIGIN, "t")),
+                'h' => Shape::Highlighter(Polyline {
+                    points: vec![DocPoint::ORIGIN],
+                }),
                 _ => Shape::Line(Line {
                     start: DocPoint::ORIGIN,
                     end: DocPoint::new(1.0, 1.0),
@@ -581,11 +651,14 @@ mod tests {
     }
 
     #[test]
-    fn runs_split_only_where_a_shape_follows_text() {
+    fn runs_split_where_an_annotation_draws_an_earlier_primitive() {
         assert_eq!(runs(document("").annotations()), Vec::<Range<usize>>::new());
         assert_eq!(runs(document("sstt").annotations()), vec![0..4]);
         assert_eq!(runs(document("tsts").annotations()), vec![0..1, 1..3, 3..4]);
         assert_eq!(runs(document("sttsst").annotations()), vec![0..3, 3..6]);
+        // Highlighters are images: after shapes, before text.
+        assert_eq!(runs(document("shht").annotations()), vec![0..4]);
+        assert_eq!(runs(document("hsth").annotations()), vec![0..1, 1..3, 3..4]);
     }
 
     #[test]
@@ -639,6 +712,7 @@ mod tests {
             Some(Content::Annotations {
                 viewport,
                 annotations: Cow::Borrowed(annotations),
+                scale_factor: 1.0,
             })
         };
         let drawing = Drawing::default();
@@ -701,6 +775,22 @@ mod tests {
                 editor.update(message);
             }
         }
+    }
+
+    #[test]
+    fn the_canvas_passes_on_the_windows_scale_factor() {
+        let mut editor = testing::editor();
+        let mut ui = Headless::new();
+        ui.events(
+            &mut editor,
+            Point::ORIGIN,
+            &[Event::Window(window::Event::Rescaled(2.0))],
+        );
+        assert_eq!(editor.scale_factor(), 2.0);
+        // Not a scale factor: ignored.
+        editor.update(Message::ScaleFactor(0.0));
+        editor.update(Message::ScaleFactor(f32::NAN));
+        assert_eq!(editor.scale_factor(), 2.0);
     }
 
     #[test]

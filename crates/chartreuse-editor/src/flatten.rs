@@ -32,6 +32,10 @@
 //!   one of zero size is a dot.
 //! - A pen stroke is the open path through its points; one whose points all
 //!   coincide is a dot.
+//! - A highlighter stroke is the same path, [`highlighter::width`] wide,
+//!   drawn opaque into a layer of its own (`highlighter_layer`) that is
+//!   composited at [`highlighter::alpha`], so it never darkens where it
+//!   overlaps itself (see [`highlighter`]).
 //! - Text is laid out by [`font::layout`] and each glyph rasterized by swash,
 //!   placed as iced places canvas text: the glyph's pixel origin is
 //!   [`LayoutGlyph::physical`] with the text's position as the offset, moved
@@ -54,8 +58,6 @@
 //! A new [`Shape`] variant needs one arm in the private `Flattener::draw`,
 //! built from its helpers:
 //!
-//! - highlighter strokes are paths: build a tiny-skia path and pass it to
-//!   `stroke` or `fill` (with its translucent color, like any other);
 //! - step markers are a filled disc plus text, from the same helpers and the
 //!   text rasterizer;
 //! - blur and pixelate regions act on everything below them: call
@@ -78,9 +80,12 @@ mod text;
 use chartreuse_core::color::Rgba8;
 use chartreuse_core::error::{Error, Result};
 use chartreuse_core::image::Image;
-use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    FillRule, FilterQuality, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, PixmapPaint,
+    Stroke, Transform,
+};
 
-use crate::model::{Annotation, Document, Point, Shape};
+use crate::model::{highlighter, Annotation, Document, Point, Polyline, Shape, Style};
 
 /// The document's base image with every annotation drawn over it, bottom to
 /// top, at the base image's size (see the [module docs](self)). The document
@@ -187,7 +192,41 @@ impl Flattener {
                 }
             }
             Shape::Pen(pen) => polyline(layer, &pen.points, width, &paint, identity),
+            Shape::Highlighter(stroke) => self.highlighter(stroke, style),
             Shape::Text(text) => self.text.draw(layer, text, style),
+        }
+    }
+
+    /// A highlighter stroke: its own layer (see [`highlighter_layer`]),
+    /// covering the whole pixels the stroke touches, composited onto the
+    /// annotation layer at [`highlighter::alpha`].
+    fn highlighter(&mut self, stroke: &Polyline, style: &Style) {
+        let reach = highlighter::width(style) / 2.0;
+        let bounds = stroke.path_bounds().expand(reach);
+        let clamp = |value: f32, size: u32| {
+            // Clamped to the image first, so the casts are exact.
+            value.clamp(0.0, size as f32) as i32
+        };
+        let (x0, y0) = (
+            clamp(bounds.min().x.floor(), self.image.width()),
+            clamp(bounds.min().y.floor(), self.image.height()),
+        );
+        let (x1, y1) = (
+            clamp(bounds.max().x.ceil(), self.image.width()),
+            clamp(bounds.max().y.ceil(), self.image.height()),
+        );
+        let (Ok(width), Ok(height)) = (u32::try_from(x1 - x0), u32::try_from(y1 - y0)) else {
+            return;
+        };
+        let transform = Transform::from_translate(-x0 as f32, -y0 as f32);
+        if let Some(layer) = highlighter_layer(stroke, style, transform, width, height) {
+            let paint = PixmapPaint {
+                opacity: highlighter::alpha(style),
+                quality: FilterQuality::Nearest,
+                ..PixmapPaint::default()
+            };
+            self.layer
+                .draw_pixmap(x0, y0, layer.as_ref(), &paint, Transform::identity(), None);
         }
     }
 
@@ -206,6 +245,36 @@ impl Flattener {
             }
         }
     }
+}
+
+/// A highlighter stroke's own layer (see [`highlighter`]): the stroke drawn
+/// at full opacity, in its color with the alpha left out, into a transparent
+/// premultiplied pixmap `width` × `height` pixels big, with `transform`
+/// mapping document coordinates onto the pixmap. Compositing it at
+/// [`highlighter::alpha`] finishes the job. The canvas draws highlighters
+/// with this too, so they look the same there.
+///
+/// `None` if the pixmap would be empty.
+pub(crate) fn highlighter_layer(
+    stroke: &Polyline,
+    style: &Style,
+    transform: Transform,
+    width: u32,
+    height: u32,
+) -> Option<Pixmap> {
+    let mut layer = Pixmap::new(width, height)?;
+    let opaque = Rgba8 {
+        a: u8::MAX,
+        ..style.color
+    };
+    polyline(
+        &mut layer,
+        &stroke.points,
+        highlighter::width(style),
+        &paint(opaque),
+        transform,
+    );
+    Some(layer)
 }
 
 /// A stroke through `points`, or a disc if they all coincide.

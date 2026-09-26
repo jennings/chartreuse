@@ -19,8 +19,8 @@
 //! - [`Document`] owns the base image, the [`Annotation`]s in z-order (index 0
 //!   at the bottom), the selection, and the undo history.
 //! - An [`Annotation`] is a stable [`AnnotationId`], a [`Shape`] (one variant
-//!   per kind: [`Line`], [`Arrow`], [`Rectangle`], [`Ellipse`], a pen's
-//!   [`Polyline`], [`Text`]) and a [`Style`].
+//!   per kind: [`Line`], [`Arrow`], [`Rectangle`], [`Ellipse`], a pen's or
+//!   [`highlighter`]'s [`Polyline`], [`Text`]) and a [`Style`].
 //! - Edits go through [`Document::add`] and [`Document::apply`] with a
 //!   [`Command`]; each is one undo step, and no-ops are not recorded.
 //! - [`Document::annotation_at`] finds the topmost annotation under a point;
@@ -37,7 +37,8 @@ mod history;
 mod style;
 
 pub use annotation::{
-    Annotation, AnnotationId, Arrow, ArrowHead, Ellipse, Line, Polyline, Rectangle, Shape, Text,
+    highlighter, Annotation, AnnotationId, Arrow, ArrowHead, Ellipse, Line, Polyline, Rectangle,
+    Shape, Text,
 };
 pub use document::Document;
 pub use geometry::{

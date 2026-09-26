@@ -36,7 +36,7 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, Point)> {
         Shape::Line(line) => vec![(Handle::Start, line.start), (Handle::End, line.end)],
         Shape::Arrow(arrow) => vec![(Handle::Start, arrow.start), (Handle::End, arrow.end)],
         Shape::Rectangle(Rectangle { rect }) | Shape::Ellipse(Ellipse { rect }) => corners(*rect),
-        Shape::Pen(_) | Shape::Text(_) => Vec::new(),
+        Shape::Pen(_) | Shape::Highlighter(_) | Shape::Text(_) => Vec::new(),
     }
 }
 

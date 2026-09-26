@@ -130,6 +130,8 @@ fn demo() -> Vec<Message> {
     script.extend(drag(at(1000.0, 120.0), at(1450.0, 400.0)));
     script.push(Message::Tool(ToolKind::Pen));
     script.extend(stroke(&wave(1000.0, 1500.0, 560.0, 40.0)));
+    script.push(Message::Tool(ToolKind::Highlighter));
+    script.extend(stroke(&wave(200.0, 900.0, 930.0, 12.0)));
     script.push(Message::Tool(ToolKind::Text));
     script.extend([
         input(InputKind::Press {
