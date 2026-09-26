@@ -208,10 +208,14 @@ impl App {
         }
     }
 
+    /// The window's title: per window for editors (`editor::title`), per
+    /// [`WindowKind`] otherwise.
     pub fn title(&self, id: window::Id) -> String {
-        self.windows
-            .kind(id)
-            .map_or_else(|| flavor::DISPLAY_NAME.to_owned(), WindowKind::title)
+        match self.windows.kind(id) {
+            Some(WindowKind::Editor) => editor::title(self, id),
+            Some(kind) => kind.title(),
+            None => flavor::DISPLAY_NAME.to_owned(),
+        }
     }
 
     pub fn theme(&self, _id: window::Id) -> Theme {
