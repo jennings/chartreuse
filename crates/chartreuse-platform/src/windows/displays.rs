@@ -52,10 +52,11 @@ impl Displays for WindowsDisplays {
     }
 }
 
-/// The connected monitors: their layout and their descriptions, in the same
-/// order.
+/// The connected monitors: their handles and physical rectangles, their layout,
+/// and their descriptions, all in the same order.
 #[derive(Debug)]
 pub(super) struct Monitors {
+    pub native: Vec<(HMONITOR, PhysicalRect)>,
     pub layout: MonitorLayout,
     pub displays: Vec<DisplayInfo>,
 }
@@ -103,7 +104,15 @@ pub(super) fn enumerate() -> Result<Monitors> {
             is_primary: monitor.is_primary,
         })
         .collect();
-    Ok(Monitors { layout, displays })
+    let native = handles
+        .into_iter()
+        .zip(monitors.iter().map(|monitor| monitor.physical))
+        .collect();
+    Ok(Monitors {
+        native,
+        layout,
+        displays,
+    })
 }
 
 /// `MONITORENUMPROC`: appends the monitor to the `Vec<HMONITOR>` behind `data`.

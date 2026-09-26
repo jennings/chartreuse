@@ -30,6 +30,7 @@ mod status_item;
 mod window_list;
 
 mod layout;
+mod pixels;
 #[cfg(windows)]
 mod util;
 mod window_filter;
