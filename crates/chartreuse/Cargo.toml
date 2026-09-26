@@ -22,6 +22,21 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # Local time for saved file names.
 chrono = { workspace = true, features = ["clock"] }
 
+# The per-user folder of the single-instance socket (`ipc`).
+[target.'cfg(unix)'.dependencies]
+dirs.workspace = true
+
+# The single-instance named pipe (`ipc`).
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 futures.workspace = true
 # Tests inspect the actions a `Task` performs (e.g. that Quit exits); iced does

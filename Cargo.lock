@@ -602,6 +602,7 @@ dependencies = [
  "chartreuse-overlay",
  "chartreuse-platform",
  "chrono",
+ "dirs",
  "futures",
  "iced",
  "iced_runtime",
@@ -609,6 +610,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "windows 0.62.2",
 ]
 
 [[package]]

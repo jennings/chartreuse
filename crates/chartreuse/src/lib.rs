@@ -14,6 +14,7 @@ pub mod events;
 pub mod export;
 pub mod hotkeys;
 pub mod import;
+pub mod ipc;
 pub mod overlay;
 pub mod permission;
 pub mod settings;
@@ -46,9 +47,13 @@ pub fn run() -> iced::Result {
         flavor::DISPLAY_NAME
     );
 
-    iced::daemon(app::App::boot, app::App::update, app::App::view)
-        .title(app::App::title)
-        .theme(app::App::theme)
-        .subscription(app::App::subscription)
-        .run()
+    iced::daemon(
+        || app::App::boot(ipc::State::default()),
+        app::App::update,
+        app::App::view,
+    )
+    .title(app::App::title)
+    .theme(app::App::theme)
+    .subscription(app::App::subscription)
+    .run()
 }

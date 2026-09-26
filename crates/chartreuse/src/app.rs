@@ -53,7 +53,8 @@ use iced::{window, Element, Subscription, Task, Theme};
 use crate::alert::Notice;
 use crate::windows::{WindowKind, WindowRegistry};
 use crate::{
-    alert, capture, editor, export, hotkeys, import, overlay, permission, settings, theme, tray,
+    alert, capture, editor, export, hotkeys, import, ipc, overlay, permission, settings, theme,
+    tray,
 };
 
 /// Selects the platform backend: `fake` for the synthetic backend, anything else
@@ -78,6 +79,7 @@ pub struct App {
     pub settings: settings::State,
     pub import: import::State,
     pub export: export::State,
+    pub ipc: ipc::State,
 }
 
 /// Every message, grouped by the module that handles it.
@@ -93,6 +95,7 @@ pub enum Message {
     Import(import::Message),
     Export(export::Message),
     Alert(alert::Message),
+    Ipc(ipc::Message),
     /// A window closed (by the user or by `window::close`).
     WindowClosed(window::Id),
 }
@@ -114,12 +117,14 @@ impl App {
             settings: settings::State::default(),
             import: import::State::default(),
             export: export::State::default(),
+            ipc: ipc::State::default(),
         }
     }
 
     /// Loads the settings, then creates the state and runs every module's
-    /// `boot`. Called by iced on the main thread.
-    pub fn boot() -> (Self, Task<Message>) {
+    /// `boot`. `ipc` is this process's command-line command and channel (see
+    /// [`ipc`]). Called by iced on the main thread.
+    pub fn boot(ipc: ipc::State) -> (Self, Task<Message>) {
         let platform = match std::env::var(BACKEND_ENV).as_deref() {
             Ok("fake") => {
                 tracing::info!("using the fake platform backend");
@@ -128,8 +133,9 @@ impl App {
             _ => chartreuse_platform::current(),
         };
         let mut app = Self::new(platform);
+        app.ipc = ipc;
         let config = app.load_config();
-        let boots: [fn(&mut Self) -> Task<Message>; 10] = [
+        let boots: [fn(&mut Self) -> Task<Message>; 11] = [
             permission::boot,
             tray::boot,
             hotkeys::boot,
@@ -140,6 +146,7 @@ impl App {
             import::boot,
             export::boot,
             alert::boot,
+            ipc::boot,
         ];
         let tasks: Vec<Task<Message>> = std::iter::once(config)
             .chain(boots.into_iter().map(|boot| boot(&mut app)))
@@ -178,6 +185,7 @@ impl App {
             Message::Import(message) => import::update(self, message),
             Message::Export(message) => export::update(self, message),
             Message::Alert(message) => alert::update(self, message),
+            Message::Ipc(message) => ipc::update(self, message),
             Message::WindowClosed(id) => self.window_closed(id),
         }
     }
@@ -235,6 +243,7 @@ impl App {
             import::subscription(self),
             export::subscription(self),
             alert::subscription(self),
+            ipc::subscription(self),
         ])
     }
 }
