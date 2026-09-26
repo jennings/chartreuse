@@ -607,6 +607,7 @@ dependencies = [
  "iced",
  "iced_runtime",
  "smol_str",
+ "tiny-skia",
  "unicode-segmentation",
 ]
 

@@ -14,6 +14,9 @@ chartreuse-imaging.workspace = true
 iced.workspace = true
 # Typed text arrives from iced as a SmolStr; the same version iced uses.
 smol_str = "0.2.2"
+# Flatten's rasterizer: the version iced's software renderer draws the canvas
+# with, so it adds no crate to the build.
+tiny-skia = { version = "0.11.4", default-features = false, features = ["std", "simd"] }
 # Backspace deletes a whole grapheme cluster (already in the tree via
 # cosmic-text).
 unicode-segmentation = "1.13.3"
