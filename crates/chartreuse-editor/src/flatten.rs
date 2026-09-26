@@ -55,8 +55,7 @@
 //! built from its helpers:
 //!
 //! - highlighter strokes are paths: build a tiny-skia path and pass it to
-//!   `Flattener::stroke` or `Flattener::fill` (with its translucent color,
-//!   like any other);
+//!   `stroke` or `fill` (with its translucent color, like any other);
 //! - step markers are a filled disc plus text, from the same helpers and the
 //!   text rasterizer;
 //! - blur and pixelate regions act on everything below them: call
@@ -142,25 +141,27 @@ impl Flattener {
         let style = &annotation.style;
         let paint = paint(style.color);
         let width = style.stroke_width.max(0.0);
+        let layer = &mut self.layer;
+        let identity = Transform::identity();
         match &annotation.shape {
-            Shape::Line(line) => self.stroke_segment(line.start, line.end, width, &paint),
+            Shape::Line(line) => polyline(layer, &[line.start, line.end], width, &paint, identity),
             Shape::Arrow(arrow) => match arrow.head(style.stroke_width) {
                 Some(head) => {
-                    self.stroke_segment(arrow.start, head.base, width, &paint);
+                    polyline(layer, &[arrow.start, head.base], width, &paint, identity);
                     let [tip, left, right] = head.corners();
                     let mut path = PathBuilder::new();
                     path.move_to(tip.x, tip.y);
                     path.line_to(left.x, left.y);
                     path.line_to(right.x, right.y);
                     path.close();
-                    self.fill(path.finish(), &paint);
+                    fill(layer, path.finish(), &paint, identity);
                 }
-                None => self.dot(arrow.start, width, &paint),
+                None => dot(layer, arrow.start, width, &paint, identity),
             },
             Shape::Rectangle(rectangle) => {
                 let [a, b, c, d] = rectangle.rect.corners();
                 if a == c {
-                    self.dot(a, width, &paint);
+                    dot(layer, a, width, &paint, identity);
                 } else {
                     let mut path = PathBuilder::new();
                     path.move_to(a.x, a.y);
@@ -168,13 +169,13 @@ impl Flattener {
                         path.line_to(corner.x, corner.y);
                     }
                     path.close();
-                    self.stroke(path.finish(), width, &paint);
+                    stroke(layer, path.finish(), width, &paint, identity);
                 }
             }
             Shape::Ellipse(ellipse) => {
                 let (start, curves) = ellipse.curves();
                 if ellipse.rect.width() == 0.0 && ellipse.rect.height() == 0.0 {
-                    self.dot(start, width, &paint);
+                    dot(layer, start, width, &paint, identity);
                 } else {
                     let mut path = PathBuilder::new();
                     path.move_to(start.x, start.y);
@@ -182,76 +183,11 @@ impl Flattener {
                         path.cubic_to(a.x, a.y, b.x, b.y, to.x, to.y);
                     }
                     path.close();
-                    self.stroke(path.finish(), width, &paint);
+                    stroke(layer, path.finish(), width, &paint, identity);
                 }
             }
-            Shape::Pen(pen) => self.polyline(&pen.points, width, &paint),
-            Shape::Text(text) => self.text.draw(&mut self.layer, text, style),
-        }
-    }
-
-    /// A stroke from `a` to `b`, or a disc if they coincide.
-    fn stroke_segment(&mut self, a: Point, b: Point, width: f32, paint: &Paint<'_>) {
-        if a == b {
-            self.dot(a, width, paint);
-        } else {
-            let mut path = PathBuilder::new();
-            path.move_to(a.x, a.y);
-            path.line_to(b.x, b.y);
-            self.stroke(path.finish(), width, paint);
-        }
-    }
-
-    /// A stroke through `points`, or a disc if they all coincide.
-    fn polyline(&mut self, points: &[Point], width: f32, paint: &Paint<'_>) {
-        let [first, rest @ ..] = points else {
-            return;
-        };
-        if rest.iter().all(|p| p == first) {
-            self.dot(*first, width, paint);
-        } else {
-            let mut path = PathBuilder::new();
-            path.move_to(first.x, first.y);
-            for p in rest {
-                path.line_to(p.x, p.y);
-            }
-            self.stroke(path.finish(), width, paint);
-        }
-    }
-
-    /// A zero-length stroke: a disc `width` across.
-    fn dot(&mut self, center: Point, width: f32, paint: &Paint<'_>) {
-        if width > 0.0 {
-            self.fill(
-                PathBuilder::from_circle(center.x, center.y, width / 2.0),
-                paint,
-            );
-        }
-    }
-
-    /// Strokes `path` (if it was valid) `width` wide with round caps and joins.
-    /// A width of zero draws nothing; tiny-skia would draw a hairline.
-    fn stroke(&mut self, path: Option<Path>, width: f32, paint: &Paint<'_>) {
-        if let Some(path) = path
-            && width > 0.0
-        {
-            let stroke = Stroke {
-                width,
-                line_cap: LineCap::Round,
-                line_join: LineJoin::Round,
-                ..Stroke::default()
-            };
-            self.layer
-                .stroke_path(&path, paint, &stroke, Transform::identity(), None);
-        }
-    }
-
-    /// Fills `path` (if it was valid) with the nonzero rule, as iced's canvas
-    /// does by default.
-    fn fill(&mut self, path: Option<Path>, paint: &Paint<'_>) {
-        if let Some(path) = path {
-            self.layer
-                .fill_path(&path, paint, FillRule::Winding, Transform::identity(), None);
+            Shape::Pen(pen) => polyline(layer, &pen.points, width, &paint, identity),
+            Shape::Text(text) => self.text.draw(layer, text, style),
         }
     }
 
@@ -269,6 +205,71 @@ impl Flattener {
                 src.fill(0);
             }
         }
+    }
+}
+
+/// A stroke through `points`, or a disc if they all coincide.
+fn polyline(
+    target: &mut Pixmap,
+    points: &[Point],
+    width: f32,
+    paint: &Paint<'_>,
+    transform: Transform,
+) {
+    let [first, rest @ ..] = points else {
+        return;
+    };
+    if rest.iter().all(|p| p == first) {
+        dot(target, *first, width, paint, transform);
+    } else {
+        let mut path = PathBuilder::new();
+        path.move_to(first.x, first.y);
+        for p in rest {
+            path.line_to(p.x, p.y);
+        }
+        stroke(target, path.finish(), width, paint, transform);
+    }
+}
+
+/// A zero-length stroke: a disc `width` across.
+fn dot(target: &mut Pixmap, center: Point, width: f32, paint: &Paint<'_>, transform: Transform) {
+    if width > 0.0 {
+        fill(
+            target,
+            PathBuilder::from_circle(center.x, center.y, width / 2.0),
+            paint,
+            transform,
+        );
+    }
+}
+
+/// Strokes `path` (if it was valid) `width` wide with round caps and joins.
+/// A width of zero draws nothing; tiny-skia would draw a hairline.
+fn stroke(
+    target: &mut Pixmap,
+    path: Option<Path>,
+    width: f32,
+    paint: &Paint<'_>,
+    transform: Transform,
+) {
+    if let Some(path) = path
+        && width > 0.0
+    {
+        let stroke = Stroke {
+            width,
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Stroke::default()
+        };
+        target.stroke_path(&path, paint, &stroke, transform, None);
+    }
+}
+
+/// Fills `path` (if it was valid) with the nonzero rule, as iced's canvas
+/// does by default.
+fn fill(target: &mut Pixmap, path: Option<Path>, paint: &Paint<'_>, transform: Transform) {
+    if let Some(path) = path {
+        target.fill_path(&path, paint, FillRule::Winding, transform, None);
     }
 }
 
