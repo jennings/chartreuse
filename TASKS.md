@@ -321,9 +321,9 @@ Depends on: 2D (shares its overlay patterns). Owns: `chartreuse-overlay::window`
 - [x] I2 — Capture display (M2). Depends on: 1A, 1B, 2A, 2B, 1E.
   - [x] Hotkey and menu → capture all displays → composite
   - [x] Save to file and copy to the clipboard, with no editor yet
-- [ ] I3 — Rectangle selection (M3). Depends on: I2, 2C, 2D.
-  - [ ] Capture first, then open overlays on the frozen image
-  - [ ] Commit → crop → hand the image off (clipboard until I4 lands)
+- [x] I3 — Rectangle selection (M3). Depends on: I2, 2C, 2D.
+  - [x] Capture first, then open overlays on the frozen image
+  - [x] Commit → crop → hand the image off (clipboard until I4 lands)
 - [ ] I4 — Editor (M4). Depends on: 2B, 2E, 2F, and the multiple-captures decision.
   - [ ] Open the editor from a capture, from the clipboard, or from a file (menu
         items); report an empty clipboard and undecodable files to the user

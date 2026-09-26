@@ -13,13 +13,17 @@
 //!    - **Display**: the snapshot is composited onto the whole desktop
 //!      ([`Snapshot::desktop`], at the largest scale factor, off the main
 //!      thread) and the image goes to `export::Message::CopyAndSave`.
-//!    - **Rectangle** and **Window** are not implemented yet: `Start` logs and
-//!      returns. I3 and I5 capture first as well, open the selection overlays
-//!      over the snapshot's per-display captures ([`Snapshot::captures`]), and
-//!      composite the selection with [`Snapshot::composite`] on
-//!      [`DisplayLayout::capture_grid`].
+//!    - **Rectangle**: the snapshot is kept while the selection overlays show
+//!      it (`overlay::Message::OpenRectangle`). A committed rectangle
+//!      ([`Message::Selected`]) is cropped at the largest scale factor of the
+//!      displays it covers ([`rectangle::output_grid`], then
+//!      [`Snapshot::composite`] off the main thread) and goes to
+//!      `export::Message::CopyAndSave` too. A cancelled selection
+//!      ([`Message::SelectionCancelled`]) discards the snapshot.
+//!    - **Window** is not implemented yet: `Start` logs and returns (I5).
 //!
-//! One capture runs at a time: a `Start` while one is in progress is ignored.
+//! One capture runs at a time, selection included: a `Start` while one is in
+//! progress is ignored.
 //!
 //! # Failures
 //!
@@ -32,23 +36,27 @@ use std::sync::Arc;
 
 use chartreuse_core::capture::CaptureMode;
 use chartreuse_core::display::{DisplayLayout, PixelGrid};
+use chartreuse_core::geometry::LogicalRect;
 use chartreuse_core::image::Image;
 use chartreuse_core::permission::Permission;
 use chartreuse_core::{Error, Result};
 use chartreuse_imaging::Composite;
+use chartreuse_overlay::rectangle;
 use chartreuse_platform::DisplayCapture;
 use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
-use crate::{export, permission};
+use crate::{export, overlay, permission};
 
 /// This feature's part of the app state ([`App::capture`]).
 #[derive(Debug, Default)]
 pub struct State {
     /// The mode of the capture in progress, from `Start` until its image is
-    /// handed on or it fails.
+    /// handed on, it fails, or its selection is cancelled.
     in_progress: Option<CaptureMode>,
+    /// The capture being selected from while the overlays show it.
+    selecting: Option<Snapshot>,
 }
 
 impl State {
@@ -132,7 +140,12 @@ pub enum Message {
     Start(CaptureMode),
     /// The displays were captured for a capture of this mode.
     Captured(CaptureMode, Result<Snapshot>),
-    /// The desktop composite of a display capture is ready.
+    /// The user committed this rectangle (global logical coordinates) over the
+    /// capture being selected from.
+    Selected(LogicalRect),
+    /// The user cancelled the selection.
+    SelectionCancelled,
+    /// The composite of a display capture or a selection is ready.
     Composited(Result<Arc<Image>>),
 }
 
@@ -144,16 +157,24 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
     match message {
         Message::Start(mode) => start(app, mode),
         Message::Captured(mode, Ok(snapshot)) => captured(app, mode, snapshot),
+        Message::Selected(rect) => selected(app, &rect),
+        Message::SelectionCancelled => {
+            tracing::info!("selection cancelled");
+            app.capture.selecting = None;
+            app.capture.in_progress = None;
+            Task::none()
+        }
         Message::Captured(_, Err(error)) | Message::Composited(Err(error)) => {
             app.capture.in_progress = None;
             failed(app, &error)
         }
         Message::Composited(Ok(image)) => {
-            app.capture.in_progress = None;
+            let mode = app.capture.in_progress.take();
             tracing::info!(
+                mode = ?mode,
                 width = image.size().width,
                 height = image.size().height,
-                "captured the desktop"
+                "captured"
             );
             Task::done(AppMessage::Export(export::Message::CopyAndSave(image)))
         }
@@ -169,12 +190,9 @@ fn start(app: &mut App, mode: CaptureMode) -> Task<AppMessage> {
         tracing::info!(%mode, %running, "a capture is already in progress; ignoring");
         return Task::none();
     }
-    match mode {
-        CaptureMode::Display => {}
-        CaptureMode::Rectangle | CaptureMode::Window => {
-            tracing::info!("{mode}: not implemented yet");
-            return Task::none();
-        }
+    if mode == CaptureMode::Window {
+        tracing::info!("{mode}: not implemented yet");
+        return Task::none();
     }
     if let Err(guidance) = permission::ensure_screen_recording(app) {
         return guidance;
@@ -190,21 +208,45 @@ fn start(app: &mut App, mode: CaptureMode) -> Task<AppMessage> {
 fn captured(app: &mut App, mode: CaptureMode, snapshot: Snapshot) -> Task<AppMessage> {
     tracing::debug!(%mode, displays = snapshot.captures().len(), "displays captured");
     match mode {
-        CaptureMode::Display => Task::perform(
-            async move {
-                snapshot
-                    .desktop()
-                    .map(|composite| Arc::new(composite.image))
-            },
-            |image| AppMessage::Capture(Message::Composited(image)),
-        ),
-        // `start` does not capture for these yet (I3, I5).
-        CaptureMode::Rectangle | CaptureMode::Window => {
+        CaptureMode::Display => composite(move || snapshot.desktop()),
+        CaptureMode::Rectangle => {
+            app.capture.selecting = Some(snapshot.clone());
+            Task::done(AppMessage::Overlay(overlay::Message::OpenRectangle(
+                snapshot,
+            )))
+        }
+        // `start` does not capture for this yet (I5).
+        CaptureMode::Window => {
             app.capture.in_progress = None;
             tracing::info!("{mode}: not implemented yet");
             Task::none()
         }
     }
+}
+
+/// Crops the committed `rect` out of the capture being selected from.
+fn selected(app: &mut App, rect: &LogicalRect) -> Task<AppMessage> {
+    let Some(snapshot) = app.capture.selecting.take() else {
+        return Task::none();
+    };
+    match rectangle::output_grid(snapshot.layout(), rect) {
+        Some(grid) => composite(move || snapshot.composite(grid)),
+        None => {
+            // Committed selections always cover a display.
+            tracing::warn!(?rect, "the selection covers no display; nothing captured");
+            app.capture.in_progress = None;
+            Task::none()
+        }
+    }
+}
+
+/// Runs `render` off the main thread, then reports its image as
+/// [`Message::Composited`].
+fn composite(render: impl FnOnce() -> Result<Composite> + Send + 'static) -> Task<AppMessage> {
+    Task::perform(
+        async move { render().map(|composite| Arc::new(composite.image)) },
+        |image| AppMessage::Capture(Message::Composited(image)),
+    )
 }
 
 fn failed(app: &mut App, error: &Error) -> Task<AppMessage> {
@@ -219,13 +261,15 @@ fn failed(app: &mut App, error: &Error) -> Task<AppMessage> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
 
     use chartreuse_core::display::{DisplayId, DisplayInfo};
-    use chartreuse_core::geometry::{LogicalRect, PhysicalSize, ScaleFactor};
+    use chartreuse_core::geometry::{LogicalPoint, LogicalRect, PhysicalSize, ScaleFactor};
     use chartreuse_core::permission::PermissionStatus;
     use chartreuse_core::window::WindowId;
+    use chartreuse_overlay::rectangle::Input;
     use chartreuse_platform::fake::Fake;
     use chartreuse_platform::{Capture, MenuAction};
     use futures::executor::block_on;
@@ -389,17 +433,20 @@ mod tests {
         let (mut app, fake, saves) = app();
         fake.set_screen_recording(PermissionStatus::Denied);
 
-        let handled = start(&mut app, CaptureMode::Display);
-        assert!(
-            !handled
-                .iter()
-                .any(|message| matches!(message, AppMessage::Capture(Message::Captured(..)))),
-            "{handled:?}"
-        );
-        assert_eq!(windows(&app, WindowKind::Permission), 1);
+        for mode in [CaptureMode::Display, CaptureMode::Rectangle] {
+            let handled = start(&mut app, mode);
+            assert!(
+                !handled
+                    .iter()
+                    .any(|message| matches!(message, AppMessage::Capture(Message::Captured(..)))),
+                "{mode}: {handled:?}"
+            );
+            assert_eq!(windows(&app, WindowKind::Permission), 1, "{mode}");
+            assert_eq!(windows(&app, WindowKind::Overlay), 0, "{mode}");
+            assert_eq!(app.capture.in_progress(), None, "{mode}");
+        }
         assert_eq!(fake.clipboard(), None);
         assert!(saved(saves.path()).is_empty());
-        assert_eq!(app.capture.in_progress(), None);
     }
 
     #[test]
@@ -448,13 +495,125 @@ mod tests {
     }
 
     #[test]
-    fn rectangle_and_window_captures_do_not_capture_yet() {
+    fn window_captures_do_not_capture_yet() {
         let (mut app, fake, saves) = app();
         app.platform.capture = Box::new(Scripted(Err(Error::Platform("captured".into()))));
-        for mode in [CaptureMode::Rectangle, CaptureMode::Window] {
-            assert_eq!(start(&mut app, mode).len(), 1, "{mode}");
-        }
+        assert_eq!(start(&mut app, CaptureMode::Window).len(), 1);
         assert_eq!(app.windows.len(), 0);
+        assert_eq!(fake.clipboard(), None);
+        assert!(saved(saves.path()).is_empty());
+    }
+
+    fn overlays(app: &App) -> Vec<iced::window::Id> {
+        app.windows.of_kind(WindowKind::Overlay).collect()
+    }
+
+    fn select(app: &mut App, input: Input) {
+        let _ = app.settle(AppMessage::Overlay(overlay::Message::Selection(input)));
+    }
+
+    /// Starts a rectangle capture of the small desktop.
+    fn start_rectangle() -> (App, Fake, tempfile::TempDir) {
+        let (mut app, _default_desktop, saves) = app();
+        let fake = small_desktop();
+        app.platform = fake.platform();
+        let _ = start(&mut app, CaptureMode::Rectangle);
+        (app, fake, saves)
+    }
+
+    #[test]
+    fn a_rectangle_capture_opens_one_overlay_per_display() {
+        let (mut app, fake, saves) = start_rectangle();
+
+        let covered: HashSet<DisplayId> = overlays(&app)
+            .into_iter()
+            .map(|window| app.overlay.display(window).expect("an overlay's display"))
+            .collect();
+        assert_eq!(overlays(&app).len(), 2);
+        assert_eq!(covered, HashSet::from([DisplayId(1), DisplayId(2)]));
+        assert_eq!(app.capture.in_progress(), Some(CaptureMode::Rectangle));
+        assert_eq!(
+            fake.clipboard(),
+            None,
+            "nothing is exported before a commit"
+        );
+
+        // One selection at a time.
+        let _ = start(&mut app, CaptureMode::Rectangle);
+        let _ = start(&mut app, CaptureMode::Display);
+        assert_eq!(overlays(&app).len(), 2);
+        assert_eq!(fake.clipboard(), None);
+        assert!(saved(saves.path()).is_empty());
+    }
+
+    #[test]
+    fn a_committed_rectangle_is_cropped_at_the_largest_scale_then_copied_and_saved() {
+        let (mut app, fake, saves) = start_rectangle();
+
+        // From (-3, -1) on the 1× display to (2, 2) on the 2× primary: 5 × 3
+        // logical points, output at 2×.
+        let (from, to) = (LogicalPoint::new(-3.0, -1.0), LogicalPoint::new(2.0, 2.0));
+        select(&mut app, Input::Press(from));
+        select(&mut app, Input::Move(to));
+        select(&mut app, Input::Release(to));
+
+        assert!(overlays(&app).is_empty(), "the overlays closed");
+        let image = fake.clipboard().expect("the selection was copied");
+        assert_eq!(image.size(), PhysicalSize::new(10, 6));
+
+        let captures = block_on(fake.platform().capture.capture_displays()).unwrap();
+        let capture = |id| &captures.iter().find(|c| c.display.id == id).unwrap().image;
+        // The primary's top-left, the global origin, is 3 × 1 points into the
+        // selection, and lands unscaled.
+        for (x, y) in [(0, 0), (1, 1), (3, 3)] {
+            assert_eq!(
+                image.pixel(6 + x, 2 + y),
+                capture(DisplayId(1)).pixel(x, y),
+                "primary pixel ({x}, {y})"
+            );
+        }
+        // The selection's top-left is pixel (1, 1) of the 1× display, doubled.
+        for (x, y) in [(0, 0), (1, 1)] {
+            assert_eq!(image.pixel(x, y), capture(DisplayId(2)).pixel(1, 1));
+        }
+        // (1, -0.5) is above the primary and right of the 1× display.
+        assert_eq!(image.pixel(8, 1).unwrap().a, 0, "gaps are transparent");
+
+        let files = saved(saves.path());
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(png_size(&files[0]), image.size());
+        assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(windows(&app, WindowKind::Alert), 0);
+    }
+
+    #[test]
+    fn escape_closes_the_overlays_and_exports_nothing() {
+        let (mut app, fake, saves) = start_rectangle();
+        select(&mut app, Input::Press(LogicalPoint::new(1.0, 1.0)));
+        select(&mut app, Input::Move(LogicalPoint::new(6.0, 5.0)));
+        select(&mut app, Input::Escape);
+
+        assert!(overlays(&app).is_empty());
+        assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(fake.clipboard(), None);
+        assert!(saved(saves.path()).is_empty());
+
+        // Input after the session ends goes nowhere.
+        select(&mut app, Input::Release(LogicalPoint::new(6.0, 5.0)));
+        assert_eq!(fake.clipboard(), None);
+
+        let _ = start(&mut app, CaptureMode::Rectangle);
+        assert_eq!(overlays(&app).len(), 2, "a new capture can start");
+    }
+
+    #[test]
+    fn an_overlay_closed_from_outside_cancels_the_selection() {
+        let (mut app, fake, saves) = start_rectangle();
+        let closed = overlays(&app)[0];
+        let _ = app.settle(AppMessage::WindowClosed(closed));
+
+        assert!(overlays(&app).is_empty(), "the other overlays closed too");
+        assert_eq!(app.capture.in_progress(), None);
         assert_eq!(fake.clipboard(), None);
         assert!(saved(saves.path()).is_empty());
     }
