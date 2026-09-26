@@ -59,6 +59,10 @@
 //!   crossings.) The editor learns the scale factor from
 //!   [`Message::ScaleFactor`], which the canvas sends when the window's
 //!   changes.
+//! - A step marker is a disc [`StepMarker::radius`] in radius filled in its
+//!   color, then its number ([`Document::step_number`]) as canvas text like
+//!   annotation text below, in [`StepMarker::number_color`], its layout box
+//!   at [`StepMarker::label_origin`] for the number's [`font::measure`].
 //! - Text is iced canvas text: shaped by cosmic-text and rasterized by the
 //!   renderer's glyph cache, in [`font::FONT`], at `font_size` with a line
 //!   height of `font_size × Text::LINE_HEIGHT` (both × `scale`), the layout
@@ -75,6 +79,11 @@
 //! [`highlighter::alpha`]: crate::model::highlighter::alpha
 //! [`font::FONT`]: crate::font::FONT
 //! [`font::layout`]: crate::font::layout
+//! [`font::measure`]: crate::font::measure
+//! [`StepMarker::radius`]: crate::model::StepMarker::radius
+//! [`StepMarker::number_color`]: crate::model::StepMarker::number_color
+//! [`StepMarker::label_origin`]: crate::model::StepMarker::label_origin
+//! [`Document::step_number`]: crate::model::Document::step_number
 
 mod render;
 mod viewport;
@@ -208,10 +217,14 @@ impl Primitive {
         }
     }
 
-    /// The kind of primitive `shape` draws last.
+    /// The kind of primitive `shape` draws last (a step marker's disc is a
+    /// mesh, its number text).
     #[must_use]
     pub const fn last(shape: &Shape) -> Self {
-        Self::first(shape)
+        match shape {
+            Shape::Step(_) => Self::Text,
+            _ => Self::first(shape),
+        }
     }
 }
 
@@ -269,6 +282,9 @@ enum Content<'a> {
         /// Device pixels per canvas pixel, which highlighters are rasterized
         /// at.
         scale_factor: f32,
+        /// The numbers of the run's step markers, which depend on the
+        /// markers outside it too.
+        numbers: Vec<usize>,
     },
 }
 
@@ -288,10 +304,12 @@ impl Content<'_> {
                 viewport,
                 annotations,
                 scale_factor,
+                numbers,
             } => Content::Annotations {
                 viewport,
                 annotations: Cow::Owned(annotations.into_owned()),
                 scale_factor,
+                numbers,
             },
         }
     }
@@ -410,10 +428,12 @@ impl Scene<'_> {
     ) {
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
         let raster = self.raster(frame.size(), clip);
+        let document = self.editor.document();
         frame.with_clip(clip, |frame| {
             for annotation in annotations {
                 if let Some(shape) = displayed(annotation, preview) {
-                    render::shape(frame, viewport, raster, &shape, &annotation.style);
+                    let number = document.step_number(annotation.id());
+                    render::shape(frame, viewport, raster, &shape, &annotation.style, number);
                 }
             }
         });
@@ -440,7 +460,15 @@ impl Scene<'_> {
         match preview {
             Preview::None | Preview::Moved(..) | Preview::Reshaped(..) => {}
             Preview::New(shape) => frame.with_clip(clip, |frame| {
-                render::shape(frame, &viewport, raster, &shape, &self.editor.style());
+                let number = Some(self.editor.document().next_step_number());
+                render::shape(
+                    frame,
+                    &viewport,
+                    raster,
+                    &shape,
+                    &self.editor.style(),
+                    number,
+                );
             }),
             Preview::Text(edit) => {
                 let style = edit.style();
@@ -571,15 +599,20 @@ impl Program<Message> for Scene<'_> {
                 })
             }
             Layer::Annotations(range) => {
-                let annotations = &self.editor.document().annotations()[range.clone()];
+                let document = self.editor.document();
+                let annotations = &document.annotations()[range.clone()];
                 let preview = self.editor.active_tool().preview();
                 let content = annotations
                     .iter()
                     .all(|annotation| unchanged(annotation, &preview))
-                    .then_some(Content::Annotations {
+                    .then(|| Content::Annotations {
                         viewport,
                         annotations: Cow::Borrowed(annotations),
                         scale_factor: self.editor.scale_factor(),
+                        numbers: annotations
+                            .iter()
+                            .filter_map(|annotation| document.step_number(annotation.id()))
+                            .collect(),
                     });
                 state.drawing.draw(renderer, size, content, |frame| {
                     self.draw_annotations(frame, &viewport, annotations, &preview);
@@ -640,6 +673,9 @@ mod tests {
                 'h' => Shape::Highlighter(Polyline {
                     points: vec![DocPoint::ORIGIN],
                 }),
+                'n' => Shape::Step(crate::model::StepMarker {
+                    center: DocPoint::ORIGIN,
+                }),
                 _ => Shape::Line(Line {
                     start: DocPoint::ORIGIN,
                     end: DocPoint::new(1.0, 1.0),
@@ -659,6 +695,9 @@ mod tests {
         // Highlighters are images: after shapes, before text.
         assert_eq!(runs(document("shht").annotations()), vec![0..4]);
         assert_eq!(runs(document("hsth").annotations()), vec![0..1, 1..3, 3..4]);
+        // Step markers are a mesh then text.
+        assert_eq!(runs(document("snt").annotations()), vec![0..3]);
+        assert_eq!(runs(document("nsn").annotations()), vec![0..1, 1..3]);
     }
 
     #[test]
@@ -713,6 +752,7 @@ mod tests {
                 viewport,
                 annotations: Cow::Borrowed(annotations),
                 scale_factor: 1.0,
+                numbers: Vec::new(),
             })
         };
         let drawing = Drawing::default();

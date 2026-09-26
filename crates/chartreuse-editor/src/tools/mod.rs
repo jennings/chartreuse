@@ -37,6 +37,7 @@ mod line;
 mod pen;
 mod rectangle;
 mod select;
+mod step;
 mod text;
 
 use std::fmt;
@@ -55,6 +56,7 @@ pub use line::LineTool;
 pub use pen::PenTool;
 pub use rectangle::RectangleTool;
 pub use select::SelectTool;
+pub use step::StepTool;
 pub use text::{TextEdit, TextInput, TextTarget, TextTool};
 
 /// How far from an annotation's drawn area a click still hits it, in canvas
@@ -77,11 +79,12 @@ pub enum ToolKind {
     Pen,
     Highlighter,
     Text,
+    Step,
 }
 
 impl ToolKind {
     /// Every kind, in toolbar order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Select,
         Self::Line,
         Self::Arrow,
@@ -90,6 +93,7 @@ impl ToolKind {
         Self::Pen,
         Self::Highlighter,
         Self::Text,
+        Self::Step,
     ];
 
     /// The name shown in the toolbar.
@@ -104,6 +108,7 @@ impl ToolKind {
             Self::Pen => "Pen",
             Self::Highlighter => "Highlighter",
             Self::Text => "Text",
+            Self::Step => "Step",
         }
     }
 
@@ -119,6 +124,7 @@ impl ToolKind {
             Self::Pen => 'p',
             Self::Highlighter => 'h',
             Self::Text => 't',
+            Self::Step => 'n',
         }
     }
 
@@ -146,6 +152,7 @@ impl ToolKind {
             Self::Pen => Box::<PenTool>::default(),
             Self::Highlighter => Box::<HighlighterTool>::default(),
             Self::Text => Box::<TextTool>::default(),
+            Self::Step => Box::<StepTool>::default(),
         }
     }
 }

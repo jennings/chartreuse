@@ -2,17 +2,20 @@
 //!
 //! # Adding a kind
 //!
-//! Each kind is a struct plus a [`Shape`] variant. Adding one (ellipse, pen,
-//! highlighter, step marker, blur region in 3B) means a new struct, a new
-//! variant, and one arm in each `match` in [`Shape`]'s methods; the compiler
-//! lists every other place (canvas, flatten) that must learn to draw it. Nothing
-//! in the document or undo machinery is kind-specific except text measurement.
+//! Each kind is a struct plus a [`Shape`] variant. Adding one means a new
+//! struct, a new variant, and one arm in each `match` in [`Shape`]'s methods;
+//! the compiler lists every other place (canvas, flatten) that must learn to
+//! draw it. Nothing in the document or undo machinery is kind-specific
+//! except text measurement and step numbering.
 //!
-//! Step markers must not store their number: derive it from the document (the
-//! 1-based rank of the marker's [`AnnotationId`] among the step markers still
-//! present), so deleting or restoring a marker renumbers the rest for free.
-//! Ids increase in creation order and are never reused, and undo restores the
+//! Step markers do not store their number: it is derived from the document
+//! ([`Document::step_number`](super::Document::step_number): the 1-based rank
+//! of the marker's [`AnnotationId`] among the step markers still present),
+//! so deleting or restoring a marker renumbers the rest for free. Ids
+//! increase in creation order and are never reused, and undo restores the
 //! original id, so that rank is stable under reordering and undo.
+
+use chartreuse_core::color::Rgba8;
 
 use super::geometry::{
     distance_to_ellipse, distance_to_polyline, distance_to_segment, distance_to_triangle, Point,
@@ -82,6 +85,8 @@ pub enum Shape {
     /// A freehand highlighter stroke: wide and translucent; see
     /// [`highlighter`].
     Highlighter(Polyline),
+    /// A numbered step marker.
+    Step(StepMarker),
     Text(Text),
 }
 
@@ -106,6 +111,7 @@ impl Shape {
     /// - Pen: within `stroke_width / 2 + tolerance` of the path.
     /// - Highlighter: within [`highlighter::width`]` / 2 + tolerance` of the
     ///   path.
+    /// - Step marker: within `tolerance` of its disc ([`StepMarker::radius`]).
     /// - Text: inside [`Text::bounds`] grown by `tolerance`.
     #[must_use]
     pub fn hit(&self, style: &Style, point: Point, tolerance: f32) -> bool {
@@ -126,6 +132,9 @@ impl Shape {
             Self::Highlighter(stroke) => {
                 distance_to_polyline(point, &stroke.points)
                     <= highlighter::width(style) / 2.0 + tolerance
+            }
+            Self::Step(step) => {
+                point.distance(step.center) <= StepMarker::radius(style.font_size) + tolerance
             }
             Self::Text(text) => text
                 .bounds(style.font_size)
@@ -157,6 +166,10 @@ impl Shape {
             Self::Highlighter(stroke) => {
                 stroke.path_bounds().expand(highlighter::width(style) / 2.0)
             }
+            Self::Step(step) => {
+                let center = Rect::from_corners(step.center, step.center);
+                center.expand(StepMarker::radius(style.font_size))
+            }
             Self::Text(text) => text.bounds(style.font_size),
         }
     }
@@ -175,6 +188,7 @@ impl Shape {
             Self::Rectangle(rectangle) => rectangle.rect = rectangle.rect.translate(delta),
             Self::Ellipse(ellipse) => ellipse.rect = ellipse.rect.translate(delta),
             Self::Pen(stroke) | Self::Highlighter(stroke) => stroke.translate(delta),
+            Self::Step(step) => step.center += delta,
             Self::Text(text) => text.position += delta,
         }
     }
@@ -380,6 +394,49 @@ impl Polyline {
         for point in &mut self.points {
             *point += delta;
         }
+    }
+}
+
+/// A numbered step marker: a disc filled in the style's color, centered on
+/// `center`, [`StepMarker::radius`] in radius (sized by the style's
+/// `font_size`; `stroke_width` does not apply), with its number on it in
+/// [`StepMarker::number_color`].
+///
+/// The number is not stored: it is the marker's rank among the document's
+/// step markers (see the [module docs](self) and
+/// [`Document::step_number`](super::Document::step_number)). Renderers lay
+/// the number out as annotation text at the style's `font_size` and center
+/// its layout box on `center` ([`StepMarker::label_origin`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepMarker {
+    pub center: Point,
+}
+
+impl StepMarker {
+    /// The disc's radius per unit of font size: room for two digits.
+    pub const RADIUS_PER_FONT_SIZE: f32 = 0.8;
+
+    /// The disc's radius for a font size (never negative).
+    #[must_use]
+    pub fn radius(font_size: f32) -> f32 {
+        font_size.max(0.0) * Self::RADIUS_PER_FONT_SIZE
+    }
+
+    /// The top-left corner of the number's layout box, given the box's size:
+    /// the box centered on the marker.
+    #[must_use]
+    pub fn label_origin(&self, label: Size) -> Point {
+        self.center - Vector::new(label.width / 2.0, label.height / 2.0)
+    }
+
+    /// The number's color on a disc of `color`: black on light colors, white
+    /// on dark ones (by sRGB luma), with the disc's alpha.
+    #[must_use]
+    pub fn number_color(color: Rgba8) -> Rgba8 {
+        let luma =
+            0.2126 * f32::from(color.r) + 0.7152 * f32::from(color.g) + 0.0722 * f32::from(color.b);
+        let level = if luma > 0.6 * 255.0 { 0 } else { u8::MAX };
+        Rgba8::new(level, level, level, color.a)
     }
 }
 
@@ -707,6 +764,41 @@ mod tests {
     }
 
     #[test]
+    fn a_step_marker_is_a_disc_sized_by_the_font() {
+        let shape = Shape::Step(StepMarker {
+            center: Point::new(50.0, 50.0),
+        });
+        // Font size 20: radius 16; the stroke width does not matter.
+        let style = Style {
+            font_size: 20.0,
+            stroke_width: 100.0,
+            ..Style::default()
+        };
+        assert!(shape.hit(&style, Point::new(50.0, 50.0), 0.0));
+        assert!(shape.hit(&style, Point::new(50.0, 67.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(50.0, 67.1), 1.0));
+        assert_eq!(
+            shape.bounds(&style),
+            Rect::from_corners(Point::new(34.0, 34.0), Point::new(66.0, 66.0))
+        );
+    }
+
+    #[test]
+    fn step_numbers_contrast_with_their_disc() {
+        let white = Rgba8::rgb(255, 255, 255);
+        let black = Rgba8::rgb(0, 0, 0);
+        assert_eq!(StepMarker::number_color(Rgba8::rgb(255, 204, 0)), black);
+        assert_eq!(StepMarker::number_color(white), black);
+        assert_eq!(StepMarker::number_color(Style::DEFAULT_COLOR), white);
+        assert_eq!(StepMarker::number_color(Rgba8::rgb(0, 122, 255)), white);
+        // The disc's alpha carries over.
+        assert_eq!(
+            StepMarker::number_color(Rgba8::new(0, 0, 0, 100)),
+            Rgba8::new(255, 255, 255, 100)
+        );
+    }
+
+    #[test]
     fn a_highlighter_reaches_its_wider_width() {
         let points = vec![Point::new(0.0, 0.0), Point::new(40.0, 0.0)];
         let shape = Shape::Highlighter(Polyline { points });
@@ -749,6 +841,14 @@ mod tests {
                 }),
                 Shape::Highlighter(Polyline {
                     points: vec![Point::new(3.0, -2.0)],
+                }),
+            ),
+            (
+                Shape::Step(StepMarker {
+                    center: Point::ORIGIN,
+                }),
+                Shape::Step(StepMarker {
+                    center: Point::new(3.0, -2.0),
                 }),
             ),
             (

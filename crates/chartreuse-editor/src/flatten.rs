@@ -36,6 +36,10 @@
 //!   drawn opaque into a layer of its own (`highlighter_layer`) that is
 //!   composited at [`highlighter::alpha`], so it never darkens where it
 //!   overlaps itself (see [`highlighter`]).
+//! - A step marker is a disc [`StepMarker::radius`] in radius filled in its
+//!   color, then its number ([`Document::step_number`]) drawn as text would
+//!   be, in [`StepMarker::number_color`], at the layout box position
+//!   [`StepMarker::label_origin`] gives for the number's [`font::measure`].
 //! - Text is laid out by [`font::layout`] and each glyph rasterized by swash,
 //!   placed as iced places canvas text: the glyph's pixel origin is
 //!   [`LayoutGlyph::physical`] with the text's position as the offset, moved
@@ -58,8 +62,6 @@
 //! A new [`Shape`] variant needs one arm in the private `Flattener::draw`,
 //! built from its helpers:
 //!
-//! - step markers are a filled disc plus text, from the same helpers and the
-//!   text rasterizer;
 //! - blur and pixelate regions act on everything below them: call
 //!   `Flattener::flush` to composite the layer so far onto the image, then
 //!   run the `chartreuse_imaging` kernel on `Flattener::image`;
@@ -74,6 +76,11 @@
 //! [`Rect::corners`]: crate::model::Rect::corners
 //! [`Ellipse::curves`]: crate::model::Ellipse::curves
 //! [`font::layout`]: crate::font::layout
+//! [`font::measure`]: crate::font::measure
+//! [`StepMarker::radius`]: crate::model::StepMarker::radius
+//! [`StepMarker::number_color`]: crate::model::StepMarker::number_color
+//! [`StepMarker::label_origin`]: crate::model::StepMarker::label_origin
+//! [`Document::step_number`]: crate::model::Document::step_number
 
 mod text;
 
@@ -85,7 +92,10 @@ use tiny_skia::{
     Stroke, Transform,
 };
 
-use crate::model::{highlighter, Annotation, Document, Point, Polyline, Shape, Style};
+use crate::font;
+use crate::model::{
+    highlighter, Annotation, Document, Point, Polyline, Shape, StepMarker, Style, Text,
+};
 
 /// The document's base image with every annotation drawn over it, bottom to
 /// top, at the base image's size (see the [module docs](self)). The document
@@ -109,7 +119,7 @@ pub fn flatten(document: &Document) -> Result<Image> {
     }
     let mut flattener = Flattener::new(base.clone())?;
     for annotation in annotations {
-        flattener.draw(annotation);
+        flattener.draw(annotation, document.step_number(annotation.id()));
     }
     flattener.flush();
     Ok(flattener.image)
@@ -142,7 +152,8 @@ impl Flattener {
     }
 
     /// Draws `annotation` into the layer, above everything drawn so far.
-    fn draw(&mut self, annotation: &Annotation) {
+    /// `number` is a step marker's number.
+    fn draw(&mut self, annotation: &Annotation, number: Option<usize>) {
         let style = &annotation.style;
         let paint = paint(style.color);
         let width = style.stroke_width.max(0.0);
@@ -193,6 +204,20 @@ impl Flattener {
             }
             Shape::Pen(pen) => polyline(layer, &pen.points, width, &paint, identity),
             Shape::Highlighter(stroke) => self.highlighter(stroke, style),
+            Shape::Step(step) => {
+                let diameter = 2.0 * StepMarker::radius(style.font_size);
+                dot(layer, step.center, diameter, &paint, identity);
+                if let Some(number) = number {
+                    let label = number.to_string();
+                    let size = font::measure(&label, style.font_size);
+                    let text = Text::new(step.label_origin(size), label);
+                    let style = Style {
+                        color: StepMarker::number_color(style.color),
+                        ..*style
+                    };
+                    self.text.draw(layer, &text, &style);
+                }
+            }
             Shape::Text(text) => self.text.draw(layer, text, style),
         }
     }

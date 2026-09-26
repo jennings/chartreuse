@@ -20,7 +20,8 @@ use chartreuse_core::geometry::PhysicalSize;
 use chartreuse_core::image::Image;
 use chartreuse_editor::flatten::flatten;
 use chartreuse_editor::model::{
-    Arrow, Document, Ellipse, Line, Point, Polyline, Rect, Rectangle, Shape, Style, Text,
+    Arrow, Command, Document, Ellipse, Line, Point, Polyline, Rect, Rectangle, Shape, StepMarker,
+    Style, Text,
 };
 use chartreuse_imaging::{decode, encode, Format};
 
@@ -265,6 +266,27 @@ fn highlighters() {
         ],
     );
     check("highlighter", &image);
+}
+
+#[test]
+fn step_markers() {
+    let step = |x: f32, y: f32| {
+        Shape::Step(StepMarker {
+            center: Point::new(x, y),
+        })
+    };
+    let mut document = Document::new(base(128, 64));
+    // Four markers, the second deleted: the others show 1, 2, and 3, each
+    // number in the color that reads on its disc.
+    document.add(step(20.0, 20.0), text_style(RED, 20.0));
+    let deleted = document.add(step(50.0, 20.0), text_style(BLUE, 20.0));
+    document.add(step(64.0, 40.5), text_style(YELLOW, 24.0));
+    document.add(
+        step(104.25, 30.0),
+        text_style(Rgba8::rgb(255, 255, 255), 14.0),
+    );
+    document.apply(Command::Delete { ids: vec![deleted] });
+    check("step", &flatten(&document).expect("flattens"));
 }
 
 #[test]

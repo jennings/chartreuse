@@ -12,7 +12,9 @@ use tiny_skia::Transform;
 use super::Viewport;
 use crate::flatten;
 use crate::font;
-use crate::model::{highlighter, Point, Polyline, Rect, Shape, Size, Style, Text, Vector};
+use crate::model::{
+    highlighter, Point, Polyline, Rect, Shape, Size, StepMarker, Style, Text, Vector,
+};
 use crate::tools::HANDLE_SIZE;
 
 /// How far right and down raster images are nudged, in canvas pixels. iced's
@@ -50,8 +52,15 @@ pub struct Raster {
 
 /// Draws `shape` in `style`, mapped onto the canvas by `viewport`, following
 /// the rules in the [canvas docs](super#drawing), with its raster parts as
-/// `raster` says.
-pub fn shape(frame: &mut Frame, viewport: &Viewport, raster: Raster, shape: &Shape, style: &Style) {
+/// `raster` says. `number` is a step marker's number.
+pub fn shape(
+    frame: &mut Frame,
+    viewport: &Viewport,
+    raster: Raster,
+    shape: &Shape,
+    style: &Style,
+    number: Option<usize>,
+) {
     let paint = color(style.color);
     let width = style.stroke_width.max(0.0) * viewport.scale();
     match shape {
@@ -113,6 +122,24 @@ pub fn shape(frame: &mut Frame, viewport: &Viewport, raster: Raster, shape: &Sha
         }
         Shape::Pen(pen) => polyline(frame, viewport, &pen.points, width, paint),
         Shape::Highlighter(stroke) => highlighter_stroke(frame, viewport, raster, stroke, style),
+        Shape::Step(step) => {
+            let diameter = 2.0 * StepMarker::radius(style.font_size) * viewport.scale();
+            dot(frame, viewport.to_canvas(step.center), diameter, paint);
+            if let Some(number) = number {
+                let label = number.to_string();
+                let origin = step.label_origin(font::measure(&label, style.font_size));
+                let style = Style {
+                    color: StepMarker::number_color(style.color),
+                    ..*style
+                };
+                frame.fill_text(canvas_text(
+                    &label,
+                    viewport.to_canvas(origin),
+                    &style,
+                    viewport.scale(),
+                ));
+            }
+        }
         Shape::Text(text) => frame.fill_text(canvas_text(
             &text.content,
             viewport.to_canvas(text.position),

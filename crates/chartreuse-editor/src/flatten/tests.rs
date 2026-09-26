@@ -6,7 +6,7 @@ use super::*;
 use crate::font;
 use crate::model::{
     distance_to_ellipse, distance_to_polyline, distance_to_segment, distance_to_triangle, Arrow,
-    Ellipse, Line, Polyline, Rect, Rectangle, Style, Text,
+    Ellipse, Line, Polyline, Rect, Rectangle, StepMarker, Style, Text,
 };
 
 /// How far outside a shape's edge a pixel's center can be and still be
@@ -205,6 +205,59 @@ fn translucent_colors_blend_source_over_in_straight_alpha() {
         .pixel(10, 10)
         .unwrap();
     assert_eq!(twice, Rgba8::rgb(255, 63, 63));
+}
+
+#[test]
+fn a_step_marker_is_a_disc_with_its_derived_number_on_it() {
+    let image = base(60, 60);
+    let center = Point::new(30.5, 29.0);
+    let marker = |x| {
+        Shape::Step(StepMarker {
+            center: Point::new(x, center.y),
+        })
+    };
+    let style = Style {
+        color: BLUE,
+        font_size: 20.0,
+        ..Style::default()
+    };
+    // The second of two markers, the first moved off the image: it shows 2.
+    let mut document = Document::new(image.clone());
+    document.add(marker(-100.0), style);
+    document.add(marker(center.x), style);
+    let result = flatten(&document).unwrap();
+
+    let radius = StepMarker::radius(style.font_size);
+    let white = StepMarker::number_color(BLUE);
+    let mut number = 0;
+    for y in 0..image.height() {
+        for x in 0..image.width() {
+            let p = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+            let d = p.distance(center) - radius;
+            let pixel = result.pixel(x, y).unwrap();
+            if d > EDGE {
+                assert_eq!(pixel, image.pixel(x, y).unwrap(), "outside at ({x}, {y})");
+            } else if d < -EDGE && d > -radius * 0.3 {
+                // The rim, clear of the number.
+                assert_eq!(pixel, BLUE, "rim at ({x}, {y})");
+            }
+            number += usize::from(pixel == white);
+        }
+    }
+    assert!(number > 20, "{number} pixels of the number");
+
+    // A lone marker shows 1: fewer pixels than "2", as a glyph check.
+    let mut single = Document::new(image);
+    single.add(marker(center.x), style);
+    let one = flatten(&single).unwrap();
+    let count = |image: &Image| {
+        image
+            .pixels()
+            .chunks_exact(4)
+            .filter(|p| *p == white.to_array())
+            .count()
+    };
+    assert!(count(&one) < count(&result), "a 1 has less ink than a 2");
 }
 
 #[test]
@@ -492,6 +545,16 @@ mod canvas {
             4.0,
             &wave(320.0, 396.0, 292.0, 5.0),
         );
+        // Three step markers, the middle one deleted: the last shows 2.
+        editor.update(Message::Color(Rgba8::rgb(255, 204, 0)));
+        editor.update(Message::FontSize(20.0));
+        editor.update(Message::Tool(ToolKind::Step));
+        for x in [260.0, 300.0, 340.25] {
+            click(&mut editor, at(x, 150.5));
+        }
+        editor.update(Message::Tool(ToolKind::Select));
+        click(&mut editor, at(300.0, 150.5));
+        editor.update(Message::Delete);
 
         editor.update(Message::Color(Rgba8::rgb(250, 250, 250)));
         editor.update(Message::FontSize(30.0));
@@ -510,7 +573,7 @@ mod canvas {
             at(140.0, 200.0),
             at(380.0, 230.0),
         );
-        assert_eq!(editor.document().annotations().len(), 9);
+        assert_eq!(editor.document().annotations().len(), 11);
 
         let flat = flatten(editor.document()).unwrap();
         let canvas = canvas_image(&editor);

@@ -85,6 +85,37 @@ impl Document {
         self.state.annotations.iter().position(|a| a.id() == id)
     }
 
+    /// The number step marker `id` shows: its 1-based rank, in creation
+    /// order (by id), among the step markers in the document. `None` if `id`
+    /// is not a step marker here. Derived, never stored, so deleting a
+    /// marker renumbers the ones after it, undoing that restores the old
+    /// numbers, and z-order changes leave the numbers alone.
+    #[must_use]
+    pub fn step_number(&self, id: AnnotationId) -> Option<usize> {
+        let is_step = |a: &&Annotation| matches!(a.shape, Shape::Step(_));
+        self.get(id).filter(is_step)?;
+        Some(
+            self.state
+                .annotations
+                .iter()
+                .filter(is_step)
+                .filter(|a| a.id() <= id)
+                .count(),
+        )
+    }
+
+    /// The number a step marker added now would show: one more than the
+    /// number of step markers (new ids are the highest).
+    #[must_use]
+    pub fn next_step_number(&self) -> usize {
+        self.state
+            .annotations
+            .iter()
+            .filter(|a| matches!(a.shape, Shape::Step(_)))
+            .count()
+            + 1
+    }
+
     /// Adds an annotation on top of the others and returns its new id; one
     /// undo step. The selection is unchanged; select the new annotation
     /// explicitly if wanted.
@@ -235,7 +266,7 @@ mod tests {
     use chartreuse_core::color::Rgba8;
     use chartreuse_core::geometry::PhysicalSize;
 
-    use super::super::annotation::{Arrow, Line, Rectangle, Text};
+    use super::super::annotation::{Arrow, Line, Rectangle, StepMarker, Text};
     use super::super::geometry::Vector;
     use super::super::history::Reorder;
     use super::super::style::StylePatch;
@@ -265,6 +296,42 @@ mod tests {
             doc.bounds(),
             Rect::from_corners(Point::ORIGIN, Point::new(200.0, 100.0))
         );
+    }
+
+    #[test]
+    fn step_numbers_follow_creation_order_through_delete_undo_and_reorder() {
+        let mut doc = document();
+        let step = |x: f32| {
+            Shape::Step(StepMarker {
+                center: Point::new(x, 50.0),
+            })
+        };
+        assert_eq!(doc.next_step_number(), 1);
+        let a = doc.add(step(10.0), Style::default());
+        let other = doc.add(line(0.0, 0.0, 5.0, 5.0), Style::default());
+        let b = doc.add(step(20.0), Style::default());
+        let c = doc.add(step(30.0), Style::default());
+        let numbers = |doc: &Document| [a, b, c].map(|id| doc.step_number(id));
+        assert_eq!(numbers(&doc), [Some(1), Some(2), Some(3)]);
+        assert_eq!(doc.step_number(other), None, "not a step marker");
+        assert_eq!(doc.next_step_number(), 4);
+
+        // Deleting the second renumbers the third; undo and redo follow.
+        doc.apply(Command::Delete { ids: vec![b] });
+        assert_eq!(numbers(&doc), [Some(1), None, Some(2)]);
+        assert_eq!(doc.next_step_number(), 3);
+        doc.undo();
+        assert_eq!(numbers(&doc), [Some(1), Some(2), Some(3)]);
+        doc.redo();
+        assert_eq!(numbers(&doc), [Some(1), None, Some(2)]);
+        doc.undo();
+
+        // Bringing the first to the front does not renumber.
+        doc.apply(Command::Reorder {
+            ids: vec![a],
+            step: Reorder::ToFront,
+        });
+        assert_eq!(numbers(&doc), [Some(1), Some(2), Some(3)]);
     }
 
     #[test]
