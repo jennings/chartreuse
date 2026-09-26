@@ -7,9 +7,10 @@
 //!    [`Snapshot`]. Its captures become image handles off the main thread
 //!    ([`Message::Frozen`]), then one overlay window opens per captured display
 //!    ([`setup::open`]), each drawing its display's capture under one shared
-//!    [`Selection`] in global logical coordinates ([`RectangleOverlay`]).
-//! 2. Every overlay's pointer and Escape input goes to that selection
-//!    ([`Message::Selection`]). Escape reaches the focused overlay only: the
+//!    [`Selector`] in global logical coordinates: a [`Selection`] drawn by
+//!    [`RectangleOverlay`].
+//! 2. Every overlay's pointer and Escape input goes to that selector
+//!    ([`Message::Rectangle`]). Escape reaches the focused overlay only: the
 //!    platform style activates the app and makes each overlay key as it is
 //!    shown, and the primary display's overlay is focused as well
 //!    ([`window::gain_focus`]), for backends whose style cannot.
@@ -24,7 +25,7 @@
 
 use chartreuse_core::display::{DisplayId, DisplayLayout};
 use chartreuse_core::flavor;
-use chartreuse_overlay::rectangle::{Input, Outcome, RectangleOverlay, Selection};
+use chartreuse_overlay::rectangle::{self, RectangleOverlay, Selection};
 use chartreuse_overlay::setup::{self, OverlayWindows, Styled};
 use chartreuse_overlay::shared;
 use iced::widget::image::Handle;
@@ -50,15 +51,74 @@ impl State {
     }
 }
 
+/// The selection gesture shared by every display's overlay, in global logical
+/// coordinates.
+#[derive(Debug, Clone)]
+pub enum Selector {
+    /// Drag out a rectangle.
+    Rectangle(Selection),
+}
+
+impl Selector {
+    /// The displays the selection spans.
+    const fn layout(&self) -> &DisplayLayout {
+        match self {
+            Self::Rectangle(selection) => selection.layout(),
+        }
+    }
+
+    /// Feeds rectangle input to a rectangle selection, returning what to tell
+    /// the capture flow if it ended the selection.
+    fn rectangle(&mut self, input: rectangle::Input) -> Option<capture::Message> {
+        let Self::Rectangle(selection) = self;
+        selection.apply(input).map(|outcome| match outcome {
+            rectangle::Outcome::Commit(rect) => capture::Message::Selected(rect),
+            rectangle::Outcome::Cancel => capture::Message::SelectionCancelled,
+        })
+    }
+
+    /// Cancels the selection if it has not ended yet, returning what to tell
+    /// the capture flow if so.
+    fn cancel(&mut self) -> Option<capture::Message> {
+        let Self::Rectangle(selection) = self;
+        selection
+            .escape()
+            .map(|_| capture::Message::SelectionCancelled)
+    }
+}
+
 /// One selection across every display's overlay window.
 #[derive(Debug)]
 struct Session {
     /// The selection, over the snapshot's layout.
-    selection: Selection,
+    selector: Selector,
     /// Each display's frozen capture, in the layout's display order.
     images: Vec<Handle>,
     /// The overlay windows still open.
     windows: OverlayWindows,
+}
+
+impl Session {
+    /// The overlay for `window`, if it is one of this session's.
+    fn view(&self, window: window::Id) -> Option<Element<'_, AppMessage>> {
+        let display = self.windows.display(window)?;
+        let (info, image) = self
+            .selector
+            .layout()
+            .displays()
+            .iter()
+            .zip(&self.images)
+            .find(|(info, _)| info.id == display)?;
+        let accent = theme::to_iced(flavor::ACCENT);
+        Some(match &self.selector {
+            Selector::Rectangle(selection) => {
+                RectangleOverlay::new(selection, info, image, accent, |input| {
+                    AppMessage::Overlay(Message::Rectangle(input))
+                })
+                .view()
+            }
+        })
+    }
 }
 
 /// This feature's messages ([`AppMessage::Overlay`]).
@@ -66,13 +126,13 @@ struct Session {
 pub enum Message {
     /// Open the rectangle-selection overlays over a capture.
     OpenRectangle(Snapshot),
-    /// A capture's images are ready to draw, one per display in `layout`'s
-    /// order: open its overlays.
-    Frozen(DisplayLayout, Vec<Handle>),
+    /// A capture's images are ready to draw, one per display in the selector's
+    /// layout order: open its overlays.
+    Frozen(Selector, Vec<Handle>),
     /// An overlay window was styled and shown.
     Styled(Styled),
-    /// Pointer or Escape input from an overlay window.
-    Selection(Input),
+    /// Pointer or Escape input from a rectangle overlay.
+    Rectangle(rectangle::Input),
 }
 
 pub fn boot(_app: &mut App) -> Task<AppMessage> {
@@ -81,10 +141,13 @@ pub fn boot(_app: &mut App) -> Task<AppMessage> {
 
 pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
     match message {
-        Message::OpenRectangle(snapshot) => freeze(snapshot),
-        Message::Frozen(layout, images) => open_rectangle(app, layout, images),
+        Message::OpenRectangle(snapshot) => freeze(
+            Selector::Rectangle(Selection::new(snapshot.layout().clone())),
+            snapshot,
+        ),
+        Message::Frozen(selector, images) => open(app, selector, images),
         Message::Styled(styled) => shown(app, styled),
-        Message::Selection(input) => select(app, input),
+        Message::Rectangle(input) => select(app, |selector| selector.rectangle(input)),
     }
 }
 
@@ -93,24 +156,11 @@ pub fn subscription(_app: &App) -> Subscription<AppMessage> {
 }
 
 pub fn view(app: &App, window: window::Id) -> Element<'_, AppMessage> {
-    let overlay = app.overlay.session.as_ref().and_then(|session| {
-        let display = session.windows.display(window)?;
-        let (info, image) = session
-            .selection
-            .layout()
-            .displays()
-            .iter()
-            .zip(&session.images)
-            .find(|(info, _)| info.id == display)?;
-        Some(RectangleOverlay::new(
-            &session.selection,
-            info,
-            image,
-            theme::to_iced(flavor::ACCENT),
-            |input| AppMessage::Overlay(Message::Selection(input)),
-        ))
-    });
-    overlay.map_or_else(|| space().into(), RectangleOverlay::view)
+    app.overlay
+        .session
+        .as_ref()
+        .and_then(|session| session.view(window))
+        .unwrap_or_else(|| space().into())
 }
 
 pub fn window_closed(app: &mut App, window: window::Id) -> Task<AppMessage> {
@@ -122,10 +172,7 @@ pub fn window_closed(app: &mut App, window: window::Id) -> Task<AppMessage> {
         return Task::none();
     }
     // Closed from outside while still selecting: give up on the selection.
-    let cancelled = session
-        .selection
-        .escape()
-        .map(|_| end(session, Outcome::Cancel));
+    let cancelled = session.selector.cancel().map(|reply| end(session, reply));
     if session.windows.is_empty() {
         app.overlay.session = None;
     }
@@ -133,29 +180,30 @@ pub fn window_closed(app: &mut App, window: window::Id) -> Task<AppMessage> {
 }
 
 /// Makes image handles of `snapshot`'s captures off the main thread, then
-/// reports them as [`Message::Frozen`]. Each handle takes its display's pixels
-/// by value, so every capture is copied: the snapshot keeps its own for cropping.
-fn freeze(snapshot: Snapshot) -> Task<AppMessage> {
+/// reports them with `selector` as [`Message::Frozen`]. Each handle takes its
+/// display's pixels by value, so every capture is copied: the snapshot keeps
+/// its own for cropping.
+fn freeze(selector: Selector, snapshot: Snapshot) -> Task<AppMessage> {
     Task::perform(
         async move {
-            let images = snapshot
+            snapshot
                 .captures()
                 .iter()
                 .map(|capture| shared::frozen_image(capture.image.clone()))
-                .collect();
-            (snapshot.layout().clone(), images)
+                .collect()
         },
-        |(layout, images)| AppMessage::Overlay(Message::Frozen(layout, images)),
+        move |images| AppMessage::Overlay(Message::Frozen(selector, images)),
     )
 }
 
-fn open_rectangle(app: &mut App, layout: DisplayLayout, images: Vec<Handle>) -> Task<AppMessage> {
-    let (windows, styled) = setup::open(&layout, &app.platform.overlay_style, |settings| {
-        app.windows.open(WindowKind::Overlay, settings)
-    });
-    tracing::debug!(overlays = windows.len(), "opened the rectangle overlays");
+fn open(app: &mut App, selector: Selector, images: Vec<Handle>) -> Task<AppMessage> {
+    let (windows, styled) =
+        setup::open(selector.layout(), &app.platform.overlay_style, |settings| {
+            app.windows.open(WindowKind::Overlay, settings)
+        });
+    tracing::debug!(overlays = windows.len(), "opened the overlays");
     let session = Session {
-        selection: Selection::new(layout),
+        selector,
         images,
         windows,
     };
@@ -172,7 +220,7 @@ fn shown(app: &App, Styled { window, result }: Styled) -> Task<AppMessage> {
     let Some(session) = &app.overlay.session else {
         return Task::none();
     };
-    let primary = session.selection.layout().primary().id;
+    let primary = session.selector.layout().primary().id;
     if session.windows.display(window) == Some(primary) {
         window::gain_focus(window)
     } else {
@@ -180,22 +228,20 @@ fn shown(app: &App, Styled { window, result }: Styled) -> Task<AppMessage> {
     }
 }
 
-fn select(app: &mut App, input: Input) -> Task<AppMessage> {
+/// Feeds input to the session's selector with `apply`, ending the session if
+/// the selection ended.
+fn select(
+    app: &mut App,
+    apply: impl FnOnce(&mut Selector) -> Option<capture::Message>,
+) -> Task<AppMessage> {
     let Some(session) = &mut app.overlay.session else {
         return Task::none();
     };
-    session
-        .selection
-        .apply(input)
-        .map_or_else(Task::none, |outcome| end(session, outcome))
+    apply(&mut session.selector).map_or_else(Task::none, |reply| end(session, reply))
 }
 
 /// Closes every overlay and tells the capture flow how the selection ended.
-fn end(session: &Session, outcome: Outcome) -> Task<AppMessage> {
-    let reply = match outcome {
-        Outcome::Commit(rect) => capture::Message::Selected(rect),
-        Outcome::Cancel => capture::Message::SelectionCancelled,
-    };
+fn end(session: &Session, reply: capture::Message) -> Task<AppMessage> {
     Task::batch([
         session.windows.close_all(),
         Task::done(AppMessage::Capture(reply)),

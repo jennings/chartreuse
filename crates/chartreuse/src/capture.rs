@@ -8,7 +8,7 @@
 //!    captures every display through the platform
 //!    [`Capture`](chartreuse_platform::Capture) trait, off the main thread.
 //! 2. The captures arrive frozen, with the [`DisplayLayout`] they were taken
-//!    from, as a [`Snapshot`] in [`Message::Captured`].
+//!    from, as a [`Snapshot`] in the [`Scene`] of [`Message::Captured`].
 //! 3. By mode:
 //!    - **Display**: the snapshot is composited onto the whole desktop
 //!      ([`Snapshot::desktop`], at the largest scale factor, off the main
@@ -133,20 +133,29 @@ impl Snapshot {
     }
 }
 
+/// What a capture took, by mode, before the mode's next step.
+#[derive(Debug, Clone)]
+pub enum Scene {
+    /// Every display, for a display capture.
+    Display(Snapshot),
+    /// Every display, to select a rectangle from.
+    Rectangle(Snapshot),
+}
+
 /// This feature's messages ([`AppMessage::Capture`]).
 #[derive(Debug, Clone)]
 pub enum Message {
     /// Start a capture: from the status item menu or a hotkey.
     Start(CaptureMode),
-    /// The displays were captured for a capture of this mode.
-    Captured(CaptureMode, Result<Snapshot>),
+    /// The displays were captured for the capture in progress.
+    Captured(Result<Scene>),
     /// The user committed this rectangle (global logical coordinates) over the
     /// capture being selected from.
     Selected(LogicalRect),
     /// The user cancelled the selection.
     SelectionCancelled,
-    /// The composite of a display capture or a selection is ready.
-    Composited(Result<Arc<Image>>),
+    /// The image of the capture in progress is ready.
+    Finished(Result<Arc<Image>>),
 }
 
 pub fn boot(_app: &mut App) -> Task<AppMessage> {
@@ -156,7 +165,7 @@ pub fn boot(_app: &mut App) -> Task<AppMessage> {
 pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
     match message {
         Message::Start(mode) => start(app, mode),
-        Message::Captured(mode, Ok(snapshot)) => captured(app, mode, snapshot),
+        Message::Captured(Ok(scene)) => captured(app, scene),
         Message::Selected(rect) => selected(app, &rect),
         Message::SelectionCancelled => {
             tracing::info!("selection cancelled");
@@ -164,11 +173,11 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
             app.capture.in_progress = None;
             Task::none()
         }
-        Message::Captured(_, Err(error)) | Message::Composited(Err(error)) => {
+        Message::Captured(Err(error)) | Message::Finished(Err(error)) => {
             app.capture.in_progress = None;
             failed(app, &error)
         }
-        Message::Composited(Ok(image)) => {
+        Message::Finished(Ok(image)) => {
             let mode = app.capture.in_progress.take();
             tracing::info!(
                 mode = ?mode,
@@ -190,36 +199,40 @@ fn start(app: &mut App, mode: CaptureMode) -> Task<AppMessage> {
         tracing::info!(%mode, %running, "a capture is already in progress; ignoring");
         return Task::none();
     }
-    if mode == CaptureMode::Window {
-        tracing::info!("{mode}: not implemented yet");
-        return Task::none();
-    }
+    let scene: fn(Snapshot) -> Scene = match mode {
+        CaptureMode::Display => Scene::Display,
+        CaptureMode::Rectangle => Scene::Rectangle,
+        CaptureMode::Window => {
+            tracing::info!("{mode}: not implemented yet");
+            return Task::none();
+        }
+    };
     if let Err(guidance) = permission::ensure_screen_recording(app) {
         return guidance;
     }
     app.capture.in_progress = Some(mode);
     let capture = app.platform.capture.capture_displays();
     Task::perform(
-        async move { capture.await.and_then(Snapshot::new) },
-        move |snapshot| AppMessage::Capture(Message::Captured(mode, snapshot)),
+        async move { capture.await.and_then(Snapshot::new).map(scene) },
+        |scene| AppMessage::Capture(Message::Captured(scene)),
     )
 }
 
-fn captured(app: &mut App, mode: CaptureMode, snapshot: Snapshot) -> Task<AppMessage> {
-    tracing::debug!(%mode, displays = snapshot.captures().len(), "displays captured");
-    match mode {
-        CaptureMode::Display => composite(move || snapshot.desktop()),
-        CaptureMode::Rectangle => {
+fn captured(app: &mut App, scene: Scene) -> Task<AppMessage> {
+    match scene {
+        Scene::Display(snapshot) => {
+            tracing::debug!(displays = snapshot.captures().len(), "displays captured");
+            composite(move || snapshot.desktop())
+        }
+        Scene::Rectangle(snapshot) => {
+            tracing::debug!(
+                displays = snapshot.captures().len(),
+                "displays captured to select from"
+            );
             app.capture.selecting = Some(snapshot.clone());
             Task::done(AppMessage::Overlay(overlay::Message::OpenRectangle(
                 snapshot,
             )))
-        }
-        // `start` does not capture for this yet (I5).
-        CaptureMode::Window => {
-            app.capture.in_progress = None;
-            tracing::info!("{mode}: not implemented yet");
-            Task::none()
         }
     }
 }
@@ -241,11 +254,11 @@ fn selected(app: &mut App, rect: &LogicalRect) -> Task<AppMessage> {
 }
 
 /// Runs `render` off the main thread, then reports its image as
-/// [`Message::Composited`].
+/// [`Message::Finished`].
 fn composite(render: impl FnOnce() -> Result<Composite> + Send + 'static) -> Task<AppMessage> {
     Task::perform(
         async move { render().map(|composite| Arc::new(composite.image)) },
-        |image| AppMessage::Capture(Message::Composited(image)),
+        |image| AppMessage::Capture(Message::Finished(image)),
     )
 }
 
@@ -509,7 +522,7 @@ mod tests {
     }
 
     fn select(app: &mut App, input: Input) {
-        let _ = app.settle(AppMessage::Overlay(overlay::Message::Selection(input)));
+        let _ = app.settle(AppMessage::Overlay(overlay::Message::Rectangle(input)));
     }
 
     /// Starts a rectangle capture of the small desktop.
