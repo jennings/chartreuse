@@ -35,7 +35,9 @@ impl Notice {
     }
 }
 
-fn capitalize(sentence: &str) -> String {
+/// `sentence` with its first letter capitalized: error messages are written to
+/// follow a colon, but notices show them on their own.
+pub(crate) fn capitalize(sentence: &str) -> String {
     let mut chars = sentence.chars();
     chars
         .next()

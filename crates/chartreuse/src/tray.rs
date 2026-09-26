@@ -5,14 +5,15 @@
 //! installs the item and keeps its handle in [`State`]; while the handle is there,
 //! [`subscription`] delivers menu choices as [`Message::Menu`]. The capture items
 //! start a capture (`capture::Message::Start`), the open items open an image
-//! (`import::Message::FromClipboard` and `FromFile`), and Quit quits.
+//! (`import::Message::FromClipboard` and `FromFile`), Settings opens the
+//! settings window (`settings::Message::Open`), and Quit quits.
 
 use chartreuse_platform::{MenuAction, StatusItemHandle};
 use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
-use crate::{capture, events, import};
+use crate::{capture, events, import, settings};
 
 /// This feature's part of the app state ([`App::tray`]).
 #[derive(Debug, Default)]
@@ -73,10 +74,7 @@ fn menu_action(action: MenuAction) -> Task<AppMessage> {
             Task::done(AppMessage::Import(import::Message::FromClipboard))
         }
         MenuAction::OpenFromFile => Task::done(AppMessage::Import(import::Message::FromFile)),
-        MenuAction::Settings => {
-            tracing::info!(?action, "status item menu action (not wired up yet)");
-            Task::none()
-        }
+        MenuAction::Settings => Task::done(AppMessage::Settings(settings::Message::Open)),
     }
 }
 
@@ -157,13 +155,22 @@ mod tests {
     }
 
     #[test]
-    fn quit_exits_and_settings_does_nothing_yet() {
+    fn quit_exits_and_settings_opens_the_settings() {
         let (mut app, _fake) = App::for_test();
         let quit = actions(app.update(AppMessage::Tray(Message::Menu(MenuAction::Quit))));
         assert!(matches!(quit.as_slice(), [Action::Exit]), "{quit:?}");
 
         let task = app.update(AppMessage::Tray(Message::Menu(MenuAction::Settings)));
-        assert!(actions(task).is_empty());
+        let opened = actions(task);
+        assert!(
+            matches!(
+                opened.as_slice(),
+                [Action::Output(AppMessage::Settings(
+                    settings::Message::Open
+                ))]
+            ),
+            "{opened:?}"
+        );
     }
 
     #[test]
