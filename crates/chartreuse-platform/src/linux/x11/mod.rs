@@ -11,6 +11,7 @@ mod connection;
 mod dialogs;
 mod displays;
 mod hotkeys;
+mod image;
 mod overlay_style;
 mod permissions;
 mod status_item;

@@ -5,4 +5,5 @@
 pub mod file_chooser;
 pub mod randr;
 pub mod tray;
+pub mod ximage;
 pub mod xsettings;
