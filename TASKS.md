@@ -338,13 +338,13 @@ Depends on: 2D (shares its overlay patterns). Owns: `chartreuse-overlay::window`
 
 Depends on: 1B, 1F, I4. Owns: `crates/chartreuse/src/settings.rs`, the settings window
 
-- [ ] Settings window, opened from the menu
-- [ ] Hotkey recorder widget for each of the three hotkeys; re-register on change and
+- [x] Settings window, opened from the menu
+- [x] Hotkey recorder widget for each of the three hotkeys; re-register on change and
       report conflicts
-- [ ] Save location picker and filename pattern with a preview
-- [ ] Post-capture behavior (open the editor, or copy directly), applied in the capture
+- [x] Save location picker and filename pattern with a preview
+- [x] Post-capture behavior (open the editor, or copy directly), applied in the capture
       flow
-- [ ] Pick up changes made to the config file by hand (reload)
+- [x] Pick up changes made to the config file by hand (reload)
 
 ### 3B — Remaining editor tools (M7)
 
