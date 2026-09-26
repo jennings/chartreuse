@@ -30,6 +30,7 @@ mod status_item;
 mod window_list;
 
 mod clipboard_data;
+mod file_types;
 #[cfg(windows)]
 mod hidden_window;
 mod ico;
