@@ -195,13 +195,13 @@ Owns: `chartreuse-imaging`
 
 Owns: `chartreuse-config`
 
-- [ ] Settings schema: three hotkeys, save directory, filename pattern, post-capture
+- [x] Settings schema: three hotkeys, save directory, filename pattern, post-capture
       behavior
-- [ ] A hand-editable TOML file in the platform config directory, with the directory
+- [x] A hand-editable TOML file in the platform config directory, with the directory
       derived from the flavor's bundle identifier
-- [ ] Defaults, a clear error for an invalid file, and forward-compatible unknown keys
-- [ ] Expand filename patterns (date/time tokens) and resolve collisions
-- [ ] Unit tests
+- [x] Defaults, a clear error for an invalid file, and forward-compatible unknown keys
+- [x] Expand filename patterns (date/time tokens) and resolve collisions
+- [x] Unit tests
 
 ### 1G — Editor document model (pure logic)
 

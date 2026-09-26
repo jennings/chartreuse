@@ -585,7 +585,9 @@ dependencies = [
  "chrono",
  "dirs",
  "serde",
+ "tempfile",
  "toml_edit",
+ "tracing",
 ]
 
 [[package]]

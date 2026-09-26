@@ -1,7 +1,7 @@
 //! The settings schema and its defaults.
 //!
 //! Every field has a default, so a settings file only needs the keys it
-//! changes. In TOML the settings look like this, with
+//! changes. In the settings file ([`crate::file`]) they look like this, with
 //! the defaults shown:
 //!
 //! ```toml

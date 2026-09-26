@@ -14,10 +14,12 @@ chartreuse-imaging.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
-
-[dev-dependencies]
-# The TOML (de)serializer the settings file uses.
+# Atomic writes of the settings file.
+tempfile.workspace = true
+# TOML that keeps comments, formatting and unknown keys when saving, with
+# serde (de)serialization and error spans.
 toml_edit = { version = "0.25.15", features = ["serde"] }
+tracing.workspace = true
 
 [lints]
 workspace = true
