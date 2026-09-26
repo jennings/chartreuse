@@ -16,6 +16,7 @@ chartreuse-imaging.workspace = true
 chartreuse-overlay.workspace = true
 chartreuse-platform.workspace = true
 iced.workspace = true
+parking_lot.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # Local time for saved file names.

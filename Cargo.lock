@@ -605,6 +605,7 @@ dependencies = [
  "futures",
  "iced",
  "iced_runtime",
+ "parking_lot",
  "tempfile",
  "tracing",
  "tracing-subscriber",
