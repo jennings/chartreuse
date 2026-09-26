@@ -2,7 +2,8 @@
 //! integration task I4.
 //!
 //! The status item's "Open from Clipboard" and "Open File…" items arrive as
-//! [`Message::FromClipboard`] and [`Message::FromFile`].
+//! [`Message::FromClipboard`] and [`Message::FromFile`]; a file named on the
+//! command line (`chartreuse open <file>`) arrives as [`Message::OpenPath`].
 //!
 //! - **Clipboard**: the image on the clipboard opens in a new editor window. A
 //!   clipboard without an image, or one that cannot be read, is reported to the
@@ -10,7 +11,8 @@
 //! - **File**: the platform's open dialog offers every format Chartreuse
 //!   decodes ([`Format::ALL`]); the chosen file is decoded off the main thread
 //!   and opens in a new editor window. A file that cannot be read or decoded is
-//!   reported, naming the file. Cancelling the dialog does nothing.
+//!   reported, naming the file. Cancelling the dialog does nothing. A file
+//!   opened by path skips the dialog and is decoded and reported the same way.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,6 +41,8 @@ pub enum Message {
     /// The user answered the open dialog: the chosen file, or `None` if they
     /// cancelled.
     FileChosen(Result<Option<PathBuf>>),
+    /// Open the image file at this path, without asking.
+    OpenPath(PathBuf),
     /// The chosen file was decoded, or failed to be.
     Decoded(PathBuf, Result<Arc<Image>>),
 }
@@ -63,7 +67,7 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
                 AppMessage::Import(Message::FileChosen(chosen))
             })
         }
-        Message::FileChosen(Ok(Some(path))) => Task::perform(
+        Message::FileChosen(Ok(Some(path))) | Message::OpenPath(path) => Task::perform(
             async move {
                 let image = chartreuse_imaging::decode_file(&path).map(Arc::new);
                 (path, image)
@@ -235,5 +239,33 @@ mod tests {
             titles,
             ["Could not open “missing.png”", "Could not open “notes.png”"]
         );
+    }
+
+    #[test]
+    fn a_file_opened_by_path_opens_without_the_dialog_or_is_reported() {
+        let (mut app, fake) = App::for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("picture.png");
+        fs::write(
+            &path,
+            chartreuse_imaging::encode(&sample(), Format::Png).unwrap(),
+        )
+        .unwrap();
+        // The dialog would cancel: only the path given opens.
+        fake.set_open_answer(None);
+
+        let _ = app.settle(AppMessage::Import(Message::OpenPath(path)));
+        assert_eq!(editor_images(&app), [sample()]);
+        assert_eq!(alerts(&app), 0);
+
+        let missing = temp.path().join("missing.png");
+        let _ = app.settle(AppMessage::Import(Message::OpenPath(missing)));
+        assert_eq!(editor_images(&app).len(), 1);
+        let titles: Vec<&str> = app
+            .alert
+            .notices()
+            .map(|notice| notice.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Could not open “missing.png”"]);
     }
 }
