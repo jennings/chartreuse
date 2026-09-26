@@ -1,7 +1,8 @@
 //! Global hotkeys: registers the hotkey set through the platform
 //! [`Hotkeys`](chartreuse_platform::Hotkeys) trait and turns presses into
 //! [`Message::Pressed`]. Owned by track 1B; settings (3A) re-register through
-//! [`reregister`].
+//! [`reregister`] and [`replace`], and [`suspend`] the hotkeys while one is
+//! being recorded.
 //!
 //! # Startup
 //!
@@ -18,9 +19,12 @@
 //! Bindings that cannot be registered (typically because another app already uses
 //! the combination) are reported in one alert listing every failing combination;
 //! the other bindings stay active. If hotkeys are unavailable altogether, that is
-//! reported instead.
+//! reported instead. [`replace`] leaves the reporting to its caller, and
+//! [`State::problem`] tells what is wrong with each mode's hotkey until the
+//! next registration.
 
 use chartreuse_config::Hotkeys;
+use chartreuse_core::capture::CaptureMode;
 use chartreuse_core::Error;
 use chartreuse_platform::{HotkeyBinding, HotkeyEvent, HotkeyRegistration};
 use iced::{Subscription, Task};
@@ -34,6 +38,26 @@ use crate::{capture, events};
 pub struct State {
     /// The active set; its receiver drives [`subscription`].
     registration: Option<HotkeyRegistration>,
+    /// Why nothing is registered, if registering failed altogether.
+    unavailable: Option<Error>,
+}
+
+impl State {
+    /// Why the hotkey of `mode` is not active after the last registration: it
+    /// failed to register, or hotkeys are unavailable altogether. `None` if it
+    /// is active, or nothing has been registered (or it is [`suspend`]ed).
+    #[must_use]
+    pub fn problem(&self, mode: CaptureMode) -> Option<&Error> {
+        if let Some(error) = &self.unavailable {
+            return Some(error);
+        }
+        self.registration
+            .as_ref()?
+            .failures
+            .iter()
+            .find(|(binding, _)| binding.mode == mode)
+            .map(|(_, error)| error)
+    }
 }
 
 /// This feature's messages ([`AppMessage::Hotkeys`]).
@@ -63,8 +87,19 @@ pub fn bindings(hotkeys: &Hotkeys) -> Vec<HotkeyBinding> {
 /// set is free to register again. Presses of the new set arrive as
 /// [`Message::Pressed`]. Main thread only: call it from `update`.
 pub fn reregister(app: &mut App, bindings: Vec<HotkeyBinding>) -> Task<AppMessage> {
-    app.hotkeys.registration = None;
-    match app.platform.hotkeys.register(&bindings) {
+    match replace(app, &bindings) {
+        Some(notice) => alert::report_error(app, notice),
+        None => Task::none(),
+    }
+}
+
+/// Replaces the registered hotkeys with `bindings`, as [`reregister`] does,
+/// but leaves telling the user about failures to the caller: returns the
+/// notice [`reregister`] would show, if any. [`State::problem`] also tells
+/// what failed. Main thread only.
+pub fn replace(app: &mut App, bindings: &[HotkeyBinding]) -> Option<Notice> {
+    suspend(app);
+    match app.platform.hotkeys.register(bindings) {
         Ok(registration) => {
             tracing::info!(
                 registered = bindings.len() - registration.failures.len(),
@@ -73,10 +108,22 @@ pub fn reregister(app: &mut App, bindings: Vec<HotkeyBinding>) -> Task<AppMessag
             );
             let notice = failure_notice(&registration.failures);
             app.hotkeys.registration = Some(registration);
-            notice.map_or_else(Task::none, |notice| alert::report_error(app, notice))
+            notice
         }
-        Err(error) => alert::report_error(app, Notice::from_error("Hotkeys unavailable", &error)),
+        Err(error) => {
+            let notice = Notice::from_error("Hotkeys unavailable", &error);
+            app.hotkeys.unavailable = Some(error);
+            Some(notice)
+        }
     }
+}
+
+/// Unregisters every hotkey until the next [`reregister`] or [`replace`], so
+/// that their key combinations reach the app's own windows (the settings
+/// window records hotkeys this way). Main thread only.
+pub fn suspend(app: &mut App) {
+    app.hotkeys.registration = None;
+    app.hotkeys.unavailable = None;
 }
 
 /// The alert for bindings that failed to register: one line per combination, or
@@ -124,7 +171,6 @@ pub fn subscription(app: &App) -> Subscription<AppMessage> {
 
 #[cfg(test)]
 mod tests {
-    use chartreuse_core::capture::CaptureMode;
     use chartreuse_core::hotkey::{Hotkey, Key, Modifiers};
     use chartreuse_platform::Hotkeys as _;
     use futures::executor::block_on;
@@ -238,6 +284,45 @@ mod tests {
     }
 
     #[test]
+    fn replacing_leaves_reporting_to_the_caller_and_tells_what_failed_per_mode() {
+        let (mut app, fake) = App::for_test();
+        let display = binding(CaptureMode::Display, Key::Digit1);
+        let window = binding(CaptureMode::Window, Key::Digit2);
+        fake.reserve_hotkey(window.hotkey);
+
+        let notice = replace(&mut app, &[display, window]);
+        assert_eq!(
+            notice.map(|notice| notice.title).as_deref(),
+            Some("Hotkey unavailable")
+        );
+        assert_eq!(alerts(&app), 0);
+        assert!(matches!(
+            app.hotkeys.problem(CaptureMode::Window),
+            Some(Error::HotkeyUnavailable { hotkey, .. }) if *hotkey == window.hotkey
+        ));
+        assert!(app.hotkeys.problem(CaptureMode::Display).is_none());
+
+        // Once it registers, the problem is gone.
+        let window = binding(CaptureMode::Window, Key::Digit3);
+        assert_eq!(replace(&mut app, &[display, window]), None);
+        assert!(app.hotkeys.problem(CaptureMode::Window).is_none());
+    }
+
+    #[test]
+    fn suspended_hotkeys_are_released_until_registered_again() {
+        let (mut app, fake) = App::for_test();
+        let _ = update(&mut app, Message::Register);
+
+        suspend(&mut app);
+        assert!(fake.registered_hotkeys().is_empty());
+        assert!(!fake.press_hotkey(defaults()[0].hotkey));
+        assert!(into_recipes(subscription(&app)).is_empty());
+
+        let _ = replace(&mut app, &defaults());
+        assert_eq!(fake.registered_hotkeys(), defaults());
+    }
+
+    #[test]
     fn the_failure_notice_lists_every_failing_combination() {
         let fake = chartreuse_platform::fake::Fake::new();
         let display = binding(CaptureMode::Display, Key::Digit1);
@@ -303,5 +388,11 @@ mod tests {
         assert_eq!(alerts(&app), 1);
         assert!(app.hotkeys.registration.is_none());
         assert!(fake.registered_hotkeys().is_empty());
+        for mode in CaptureMode::ALL {
+            assert!(
+                matches!(app.hotkeys.problem(mode), Some(Error::Unsupported(_))),
+                "{mode}"
+            );
+        }
     }
 }
