@@ -6,6 +6,7 @@ pub mod ewmh;
 pub mod file_chooser;
 pub mod keysym;
 pub mod randr;
+pub mod screenshot;
 pub mod tray;
 pub mod wl_output;
 pub mod xgrab;

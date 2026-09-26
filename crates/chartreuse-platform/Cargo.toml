@@ -64,17 +64,19 @@ windows = { version = "0.62.2", features = [
 # Linux and other free Unix desktops. Everything here is pure Rust or loads its
 # system library at run time, so building needs no `-dev` packages.
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
-# Decoding the tray icons.
+# Decoding the tray icons and portal screenshots, and resampling screenshots
+# onto displays.
 chartreuse-imaging.workspace = true
 # The clipboard: X11 selections served from a thread over x11rb, images
 # exchanged as PNG.
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
-# XDG desktop portals (FileChooser), over zbus. `async-io` runs zbus on the
+# XDG desktop portals (FileChooser, Screenshot), over zbus. `async-io` runs zbus on the
 # async-io runtime iced's Linux theme detection already pulls in, instead of
 # adding tokio.
 ashpd = { version = "0.13.13", default-features = false, features = [
     "async-io",
     "file_chooser",
+    "screenshot",
 ] }
 # The StatusNotifierItem tray, over the same zbus runtime; `blocking` runs its
 # service on its own thread.

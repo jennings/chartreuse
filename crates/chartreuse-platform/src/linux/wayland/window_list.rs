@@ -1,6 +1,9 @@
-//! Wayland: on-screen window enumeration. Implemented by track 4B.
-//!
-//! Until then every call fails with [`Error::Unsupported`].
+//! Wayland: window enumeration, which Wayland does not offer. Clients see only
+//! their own windows (the protocol has no global window list, and the
+//! compositor-specific ones, such as wlr-foreign-toplevel, carry no
+//! geometry), so window selection over a frozen screenshot is impossible.
+//! Window capture instead goes through the Screenshot portal's own window
+//! picker (see [`WaylandCapture`](super::capture::WaylandCapture)).
 
 use chartreuse_core::window::WindowInfo;
 use chartreuse_core::{Error, Result};
@@ -20,6 +23,9 @@ impl WaylandWindowList {
 
 impl WindowList for WaylandWindowList {
     fn windows(&self) -> BoxFuture<'static, Result<Vec<WindowInfo>>> {
-        future::ready(Err(Error::Unsupported("window enumeration"))).boxed()
+        future::ready(Err(Error::Unsupported(
+            "listing other applications' windows on Wayland",
+        )))
+        .boxed()
     }
 }
