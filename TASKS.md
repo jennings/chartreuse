@@ -405,24 +405,26 @@ Depends on: Stage 2 integration complete. Owns: `chartreuse-platform/src/windows
 Depends on: Stage 2 integration complete. Owns: `chartreuse-platform/src/linux/`
 
 - [ ] Shared between X11 and Wayland (parallel)
-  - [ ] StatusNotifierItem tray over D-Bus
-  - [ ] File dialogs through the FileChooser portal
+  - [x] StatusNotifierItem tray over D-Bus
+  - [x] File dialogs through the FileChooser portal
   - [ ] Launch at login via XDG autostart (if 3C is in scope)
-- [ ] X11 (parallel subsystems)
-  - [ ] RandR displays
-  - [ ] `XShmGetImage` capture
-  - [ ] EWMH window list and XComposite window capture
-  - [ ] Override-redirect overlays
-  - [ ] `XGrabKey` hotkeys
-  - [ ] `CLIPBOARD` selection
+- [x] X11 (parallel subsystems)
+  - [x] RandR displays
+  - [x] `XShmGetImage` capture
+  - [x] EWMH window list and XComposite window capture
+  - [x] Override-redirect overlays
+  - [x] `XGrabKey` hotkeys
+  - [x] `CLIPBOARD` selection
 - [ ] Wayland (after X11 is working, per PLAN.md; subsystems in parallel)
-  - [ ] Displays from `wl_output`, `xdg-output`, and fractional scale
-  - [ ] Display capture through the Screenshot portal
+  - [x] Displays from `wl_output`, `xdg-output`, and fractional scale
+  - [x] Display capture through the Screenshot portal
   - [ ] Window capture through the interactive portal, or `ext-image-copy-capture`
         where available
   - [ ] `wlr-layer-shell` overlays, with a full-screen `xdg_toplevel` fallback
-  - [ ] GlobalShortcuts portal
-  - [ ] Clipboard with `wl_data_device`
+  - [x] GlobalShortcuts portal
+  - [x] Clipboard through data-control (`ext-data-control`, `wlr-data-control`), and the
+        X11 selection through XWayland on GNOME (not `wl_data_device`, which needs the
+        focused window's connection)
 - [ ] Integration pass for each backend
 - [ ] Document the limitations of each compositor
 

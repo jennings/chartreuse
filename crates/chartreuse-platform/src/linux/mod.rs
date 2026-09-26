@@ -1,9 +1,43 @@
 //! Linux and other free Unix desktops: an X11 and a Wayland backend, chosen at
 //! runtime from the session type.
 //!
-//! The backends' pure logic lives in [`logic`], which uses no Linux-only crate:
-//! test builds on other hosts compile it (and the session detection here), so
-//! its unit tests run on every development machine.
+//! Both backends share the tray ([`tray`], a StatusNotifierItem), the file
+//! dialogs ([`file_chooser`], the FileChooser portal), and the clipboard
+//! ([`clipboard`]). The backends' pure logic lives in [`logic`], which uses
+//! no Linux-only crate: test builds on other hosts compile it (and the session
+//! detection here), so its unit tests run on every development machine.
+//!
+//! # Limitations
+//!
+//! Known from the protocols and libraries the backends use; not yet checked
+//! on every desktop.
+//!
+//! - Tray: needs a StatusNotifierItem host. KDE Plasma, Xfce, Cinnamon, MATE,
+//!   LXQt, Budgie, and Waybar have one; GNOME needs the AppIndicator
+//!   extension. There is no fallback to the older XEmbed tray.
+//! - X11 scaling: the desktop has one scale factor (`Xft.dpi`, as every
+//!   major desktop sets it). Without a DPI setting winit derives a factor per
+//!   monitor from its physical size; the display model then uses the primary
+//!   monitor's for all, and overlays on monitors whose factor differs are
+//!   misplaced.
+//! - X11 window capture: without a compositing manager, a window is read
+//!   from the screen, so whatever covers it is captured too.
+//! - Wayland overlays: winit offers no layer-shell, so the platform crate
+//!   cannot put overlays above other windows (see [`wayland`]'s overlay
+//!   style); they open as ordinary windows.
+//! - Wayland windows: clients cannot list other clients' windows, so window
+//!   selection fails; window capture is the Screenshot portal's interactive
+//!   picker, which the app's window mode (listing windows first) does not
+//!   reach yet.
+//! - Wayland screen capture: needs the Screenshot portal (GNOME, KDE, or
+//!   xdg-desktop-portal-wlr on wlroots compositors), whose first use asks the
+//!   user. The screenshot is assumed to cover the logical layout at one scale,
+//!   as GNOME's and grim's do.
+//! - Wayland hotkeys: need the GlobalShortcuts portal (GNOME 48 and later,
+//!   KDE Plasma, Hyprland; not xdg-desktop-portal-wlr), which may ask the user
+//!   to confirm or change the triggers. Failures are only logged.
+//! - Wayland clipboard: the data-control protocols (KDE, wlroots); on GNOME
+//!   through XWayland.
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod blocking;
