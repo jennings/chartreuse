@@ -25,13 +25,14 @@ enum Session {
 }
 
 impl Session {
-    /// Wayland if `WAYLAND_DISPLAY` is set or `XDG_SESSION_TYPE` says so, else X11
-    /// (which also covers XWayland-only setups).
-    fn detect(wayland_display: Option<&OsStr>, xdg_session_type: Option<&OsStr>) -> Self {
-        let wayland_socket = wayland_display.is_some_and(|value| !value.is_empty());
-        let wayland_session =
-            xdg_session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland"));
-        if wayland_socket || wayland_session {
+    /// Wayland if `WAYLAND_DISPLAY` or `WAYLAND_SOCKET` is set (and not
+    /// empty), else X11, which covers XWayland too. That is winit's own rule,
+    /// and the backend has to match winit's: the overlays and editors are
+    /// winit windows. So a Wayland session (`XDG_SESSION_TYPE`) whose
+    /// `WAYLAND_DISPLAY` was unset, to run the app through XWayland, gets X11.
+    fn detect(wayland_display: Option<&OsStr>, wayland_socket: Option<&OsStr>) -> Self {
+        let set = |value: Option<&OsStr>| value.is_some_and(|value| !value.is_empty());
+        if set(wayland_display) || set(wayland_socket) {
             Self::Wayland
         } else {
             Self::X11
@@ -43,8 +44,8 @@ impl Session {
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn platform() -> Platform {
     let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
-    let xdg_session_type = std::env::var_os("XDG_SESSION_TYPE");
-    match Session::detect(wayland_display.as_deref(), xdg_session_type.as_deref()) {
+    let wayland_socket = std::env::var_os("WAYLAND_SOCKET");
+    match Session::detect(wayland_display.as_deref(), wayland_socket.as_deref()) {
         Session::X11 => x11::platform(),
         Session::Wayland => wayland::platform(),
     }
@@ -54,23 +55,22 @@ pub fn platform() -> Platform {
 mod tests {
     use super::*;
 
-    fn detect(wayland_display: Option<&str>, xdg_session_type: Option<&str>) -> Session {
+    fn detect(wayland_display: Option<&str>, wayland_socket: Option<&str>) -> Session {
         Session::detect(
             wayland_display.map(OsStr::new),
-            xdg_session_type.map(OsStr::new),
+            wayland_socket.map(OsStr::new),
         )
     }
 
     #[test]
-    fn wayland_socket_or_session_type_selects_wayland() {
+    fn a_wayland_display_or_socket_selects_wayland() {
         assert_eq!(detect(Some("wayland-0"), None), Session::Wayland);
-        assert_eq!(detect(None, Some("Wayland")), Session::Wayland);
+        assert_eq!(detect(None, Some("3")), Session::Wayland);
     }
 
     #[test]
     fn everything_else_falls_back_to_x11() {
         assert_eq!(detect(None, None), Session::X11);
-        assert_eq!(detect(Some(""), Some("x11")), Session::X11);
-        assert_eq!(detect(None, Some("tty")), Session::X11);
+        assert_eq!(detect(Some(""), Some("")), Session::X11);
     }
 }
