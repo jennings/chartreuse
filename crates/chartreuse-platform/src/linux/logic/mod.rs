@@ -3,7 +3,9 @@
 //! its unit tests run on macOS and Windows too.
 
 pub mod file_chooser;
+pub mod keysym;
 pub mod randr;
 pub mod tray;
+pub mod xgrab;
 pub mod ximage;
 pub mod xsettings;
