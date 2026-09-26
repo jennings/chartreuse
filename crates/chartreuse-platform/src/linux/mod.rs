@@ -8,6 +8,8 @@
 #[cfg(all(unix, not(target_os = "macos")))]
 mod blocking;
 #[cfg(all(unix, not(target_os = "macos")))]
+mod clipboard;
+#[cfg(all(unix, not(target_os = "macos")))]
 mod file_chooser;
 #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 mod logic;
