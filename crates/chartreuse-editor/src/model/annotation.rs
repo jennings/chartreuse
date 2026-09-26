@@ -15,7 +15,8 @@
 //! original id, so that rank is stable under reordering and undo.
 
 use super::geometry::{
-    distance_to_ellipse, distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector,
+    distance_to_ellipse, distance_to_polyline, distance_to_segment, distance_to_triangle, Point,
+    Rect, Size, Vector,
 };
 use super::style::Style;
 
@@ -76,6 +77,8 @@ pub enum Shape {
     Arrow(Arrow),
     Rectangle(Rectangle),
     Ellipse(Ellipse),
+    /// A freehand pen stroke.
+    Pen(Polyline),
     Text(Text),
 }
 
@@ -97,6 +100,7 @@ impl Shape {
     ///   inside.)
     /// - Ellipse: within `stroke_width / 2 + tolerance` of the outline
     ///   ([`distance_to_ellipse`]); like a rectangle, not inside.
+    /// - Pen: within `stroke_width / 2 + tolerance` of the path.
     /// - Text: inside [`Text::bounds`] grown by `tolerance`.
     #[must_use]
     pub fn hit(&self, style: &Style, point: Point, tolerance: f32) -> bool {
@@ -113,6 +117,7 @@ impl Shape {
             },
             Self::Rectangle(rectangle) => rectangle.rect.distance_to_outline(point) <= reach,
             Self::Ellipse(ellipse) => distance_to_ellipse(point, ellipse.rect) <= reach,
+            Self::Pen(pen) => distance_to_polyline(point, &pen.points) <= reach,
             Self::Text(text) => text
                 .bounds(style.font_size)
                 .expand(tolerance)
@@ -139,6 +144,7 @@ impl Shape {
             },
             Self::Rectangle(rectangle) => rectangle.rect.expand(half),
             Self::Ellipse(ellipse) => ellipse.rect.expand(half),
+            Self::Pen(pen) => pen.path_bounds().expand(half),
             Self::Text(text) => text.bounds(style.font_size),
         }
     }
@@ -156,6 +162,7 @@ impl Shape {
             }
             Self::Rectangle(rectangle) => rectangle.rect = rectangle.rect.translate(delta),
             Self::Ellipse(ellipse) => ellipse.rect = ellipse.rect.translate(delta),
+            Self::Pen(pen) => pen.translate(delta),
             Self::Text(text) => text.position += delta,
         }
     }
@@ -289,6 +296,39 @@ impl Ellipse {
                 [p(kx, -ry), p(rx, -ky), p(rx, 0.0)],
             ],
         )
+    }
+}
+
+/// A freehand path: straight segments through `points` in order, stroked
+/// like any stroke (round caps and joins; see [`Style`]). A single point is
+/// a dot. The freehand tools smooth and simplify the pointer's path before
+/// storing it, so the points are the drawn geometry exactly.
+///
+/// Always has at least one point when made by a tool; one with none draws
+/// and hits nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Polyline {
+    pub points: Vec<Point>,
+}
+
+impl Polyline {
+    /// The smallest rectangle containing every point (a zero-size one at the
+    /// origin if there are none).
+    #[must_use]
+    pub fn path_bounds(&self) -> Rect {
+        let mut points = self.points.iter();
+        let Some(&first) = points.next() else {
+            return Rect::default();
+        };
+        points.fold(Rect::from_corners(first, first), |bounds, &p| {
+            bounds.union(&Rect::from_corners(p, p))
+        })
+    }
+
+    fn translate(&mut self, delta: Vector) {
+        for point in &mut self.points {
+            *point += delta;
+        }
     }
 }
 
@@ -591,6 +631,30 @@ mod tests {
         }
     }
 
+    fn pen(points: &[(f32, f32)]) -> Shape {
+        Shape::Pen(Polyline {
+            points: points.iter().map(|&(x, y)| Point::new(x, y)).collect(),
+        })
+    }
+
+    #[test]
+    fn pen_hits_near_its_path_and_bounds_every_point() {
+        let shape = pen(&[(0.0, 0.0), (10.0, 0.0), (10.0, 20.0), (30.0, 25.0)]);
+        let style = style(4.0);
+        // Beside the middle segment, within 2 + 1 and just beyond.
+        assert!(shape.hit(&style, Point::new(13.0, 10.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(13.1, 10.0), 1.0));
+        // Inside the path's bounding box but away from the path.
+        assert!(!shape.hit(&style, Point::new(20.0, 5.0), 1.0));
+        assert_eq!(
+            shape.bounds(&style),
+            Rect::from_corners(Point::new(-2.0, -2.0), Point::new(32.0, 27.0))
+        );
+        // One point is a dot; none is nothing.
+        assert!(pen(&[(5.0, 5.0)]).hit(&style, Point::new(7.0, 5.0), 0.0));
+        assert!(!pen(&[]).hit(&style, Point::ORIGIN, 100.0));
+    }
+
     #[test]
     fn translate_moves_every_point_of_every_kind() {
         let delta = Vector::new(3.0, -2.0);
@@ -609,6 +673,10 @@ mod tests {
                 Shape::Ellipse(Ellipse {
                     rect: rect.translate(delta),
                 }),
+            ),
+            (
+                pen(&[(0.0, 0.0), (1.0, 5.0)]),
+                pen(&[(3.0, -2.0), (4.0, 3.0)]),
             ),
             (
                 Shape::Text(Text::new(Point::ORIGIN, "x")),

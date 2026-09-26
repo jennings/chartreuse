@@ -21,15 +21,17 @@
 //! Per annotation, in its [`Style`]'s color (straight alpha), exactly as the
 //! canvas docs describe:
 //!
-//! - Strokes (a line, an arrow's shaft, a rectangle's or ellipse's outline)
-//!   are `stroke_width` wide, centered on the geometry, with round caps and
-//!   round joins. A zero-length stroke is a disc `stroke_width` across; a
-//!   stroke width of zero (or less) draws nothing.
+//! - Strokes (a line, an arrow's shaft, a rectangle's or ellipse's outline, a
+//!   pen's path) are `stroke_width` wide, centered on the geometry, with
+//!   round caps and round joins. A zero-length stroke is a disc
+//!   `stroke_width` across; a stroke width of zero (or less) draws nothing.
 //! - An arrow is its shaft stroked from `start` to [`ArrowHead::base`], then
 //!   the head triangle `[tip, left, right]` filled, never stroked.
 //! - A rectangle is the closed outline through [`Rect::corners`].
 //! - An ellipse is the closed path of the Béziers of [`Ellipse::curves`];
 //!   one of zero size is a dot.
+//! - A pen stroke is the open path through its points; one whose points all
+//!   coincide is a dot.
 //! - Text is laid out by [`font::layout`] and each glyph rasterized by swash,
 //!   placed as iced places canvas text: the glyph's pixel origin is
 //!   [`LayoutGlyph::physical`] with the text's position as the offset, moved
@@ -52,9 +54,9 @@
 //! A new [`Shape`] variant needs one arm in the private `Flattener::draw`,
 //! built from its helpers:
 //!
-//! - pen and highlighter strokes are paths: build a tiny-skia path and pass
-//!   it to `Flattener::stroke` or `Flattener::fill` (the highlighter with
-//!   its translucent color, like any other);
+//! - highlighter strokes are paths: build a tiny-skia path and pass it to
+//!   `Flattener::stroke` or `Flattener::fill` (with its translucent color,
+//!   like any other);
 //! - step markers are a filled disc plus text, from the same helpers and the
 //!   text rasterizer;
 //! - blur and pixelate regions act on everything below them: call
@@ -183,6 +185,7 @@ impl Flattener {
                     self.stroke(path.finish(), width, &paint);
                 }
             }
+            Shape::Pen(pen) => self.polyline(&pen.points, width, &paint),
             Shape::Text(text) => self.text.draw(&mut self.layer, text, style),
         }
     }
@@ -195,6 +198,23 @@ impl Flattener {
             let mut path = PathBuilder::new();
             path.move_to(a.x, a.y);
             path.line_to(b.x, b.y);
+            self.stroke(path.finish(), width, paint);
+        }
+    }
+
+    /// A stroke through `points`, or a disc if they all coincide.
+    fn polyline(&mut self, points: &[Point], width: f32, paint: &Paint<'_>) {
+        let [first, rest @ ..] = points else {
+            return;
+        };
+        if rest.iter().all(|p| p == first) {
+            self.dot(*first, width, paint);
+        } else {
+            let mut path = PathBuilder::new();
+            path.move_to(first.x, first.y);
+            for p in rest {
+                path.line_to(p.x, p.y);
+            }
             self.stroke(path.finish(), width, paint);
         }
     }

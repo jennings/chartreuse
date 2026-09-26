@@ -20,7 +20,7 @@ use chartreuse_core::geometry::PhysicalSize;
 use chartreuse_core::image::Image;
 use chartreuse_editor::flatten::flatten;
 use chartreuse_editor::model::{
-    Arrow, Document, Ellipse, Line, Point, Rect, Rectangle, Shape, Style, Text,
+    Arrow, Document, Ellipse, Line, Point, Polyline, Rect, Rectangle, Shape, Style, Text,
 };
 use chartreuse_imaging::{decode, encode, Format};
 
@@ -86,6 +86,12 @@ fn rectangle(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
 fn ellipse(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
     Shape::Ellipse(Ellipse {
         rect: Rect::from_corners(Point::new(ax, ay), Point::new(bx, by)),
+    })
+}
+
+fn pen(points: &[(f32, f32)]) -> Shape {
+    Shape::Pen(Polyline {
+        points: points.iter().map(|&(x, y)| Point::new(x, y)).collect(),
     })
 }
 
@@ -207,6 +213,30 @@ fn ellipses() {
         ],
     );
     check("ellipse", &image);
+}
+
+#[test]
+fn pen_strokes() {
+    let spiral: Vec<_> = (0..80)
+        .map(|i| {
+            let t = i as f32 / 8.0;
+            (40.0 + t.cos() * t * 3.0, 36.0 + t.sin() * t * 3.0)
+        })
+        .collect();
+    let image = flattened(
+        base(112, 72),
+        [
+            (pen(&spiral), style(RED, 3.0)),
+            // Sharp corners get round joins.
+            (
+                pen(&[(76.0, 64.0), (86.0, 10.0), (96.0, 64.0), (106.0, 10.0)]),
+                style(BLUE, 6.0),
+            ),
+            // A single point: a dot.
+            (pen(&[(20.0, 62.0)]), style(YELLOW, 10.0)),
+        ],
+    );
+    check("pen", &image);
 }
 
 #[test]

@@ -88,6 +88,30 @@ fn demo() -> Vec<Message> {
         ]
         .map(input)
     };
+    // A press, a move through each of `points`, and a release at the last.
+    let stroke = |points: &[Point]| {
+        let mut messages = vec![input(InputKind::Press {
+            position: points[0],
+            clicks: 1,
+        })];
+        messages.extend(
+            points[1..]
+                .iter()
+                .map(|&position| input(InputKind::Move { position })),
+        );
+        messages.push(input(InputKind::Release {
+            position: points[points.len() - 1],
+        }));
+        messages
+    };
+    let wave = |x0: f32, x1: f32, y: f32, amplitude: f32| -> Vec<Point> {
+        (0..=80)
+            .map(|i| {
+                let t = i as f32 / 80.0;
+                at(x0 + (x1 - x0) * t, y + amplitude * (t * 14.0).sin())
+            })
+            .collect()
+    };
     let key = |key: keyboard::Key, text: Option<&str>| {
         input(InputKind::Key {
             key,
@@ -104,6 +128,8 @@ fn demo() -> Vec<Message> {
     script.extend(drag(at(200.0, 820.0), at(900.0, 880.0)));
     script.push(Message::Tool(ToolKind::Ellipse));
     script.extend(drag(at(1000.0, 120.0), at(1450.0, 400.0)));
+    script.push(Message::Tool(ToolKind::Pen));
+    script.extend(stroke(&wave(1000.0, 1500.0, 560.0, 40.0)));
     script.push(Message::Tool(ToolKind::Text));
     script.extend([
         input(InputKind::Press {

@@ -85,6 +85,7 @@ pub fn shape(frame: &mut Frame, viewport: &Viewport, shape: &Shape, style: &Styl
                 frame.stroke(&outline, stroke(width, paint));
             }
         }
+        Shape::Pen(pen) => polyline(frame, viewport, &pen.points, width, paint),
         Shape::Text(text) => frame.fill_text(canvas_text(
             &text.content,
             viewport.to_canvas(text.position),
@@ -199,6 +200,24 @@ fn stroke_segment(frame: &mut Frame, a: CanvasPoint, b: CanvasPoint, width: f32,
         dot(frame, a, width, paint);
     } else {
         frame.stroke(&Path::line(a, b), stroke(width, paint));
+    }
+}
+
+/// A stroke through document `points`, or a disc if they all coincide.
+fn polyline(frame: &mut Frame, viewport: &Viewport, points: &[Point], width: f32, paint: Color) {
+    let [first, rest @ ..] = points else {
+        return;
+    };
+    if rest.iter().all(|p| p == first) {
+        dot(frame, viewport.to_canvas(*first), width, paint);
+    } else {
+        let path = Path::new(|path| {
+            path.move_to(viewport.to_canvas(*first));
+            for p in rest {
+                path.line_to(viewport.to_canvas(*p));
+            }
+        });
+        frame.stroke(&path, stroke(width, paint));
     }
 }
 

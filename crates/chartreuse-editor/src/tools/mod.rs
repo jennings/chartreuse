@@ -23,13 +23,17 @@
 //!
 //! Add a module with the tool type, a [`ToolKind`] variant, and an arm in
 //! [`ToolKind::create`]. Tools that draw a shape by dragging from one corner
-//! or end to the other only need a [`DragShape`] (see `line.rs`).
+//! or end to the other only need a [`DragShape`] (see `line.rs`), and tools
+//! that draw along the pointer's path only a [`FreehandShape`] (see
+//! `pen.rs`).
 
 mod arrow;
 mod drag;
 mod ellipse;
+mod freehand;
 mod handles;
 mod line;
+mod pen;
 mod rectangle;
 mod select;
 mod text;
@@ -43,8 +47,10 @@ use crate::model::{AnnotationId, Document, Point, Shape, Style, Vector};
 pub use arrow::ArrowTool;
 pub use drag::{DragShape, DragTool};
 pub use ellipse::EllipseTool;
+pub use freehand::{FreehandShape, FreehandTool};
 pub use handles::{handle_at, handles, reshaped, Handle, HANDLE_REACH, HANDLE_SIZE};
 pub use line::LineTool;
+pub use pen::PenTool;
 pub use rectangle::RectangleTool;
 pub use select::SelectTool;
 pub use text::{TextEdit, TextInput, TextTarget, TextTool};
@@ -66,17 +72,19 @@ pub enum ToolKind {
     Arrow,
     Rectangle,
     Ellipse,
+    Pen,
     Text,
 }
 
 impl ToolKind {
     /// Every kind, in toolbar order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Select,
         Self::Line,
         Self::Arrow,
         Self::Rectangle,
         Self::Ellipse,
+        Self::Pen,
         Self::Text,
     ];
 
@@ -89,6 +97,7 @@ impl ToolKind {
             Self::Arrow => "Arrow",
             Self::Rectangle => "Rectangle",
             Self::Ellipse => "Ellipse",
+            Self::Pen => "Pen",
             Self::Text => "Text",
         }
     }
@@ -102,6 +111,7 @@ impl ToolKind {
             Self::Arrow => 'a',
             Self::Rectangle => 'r',
             Self::Ellipse => 'e',
+            Self::Pen => 'p',
             Self::Text => 't',
         }
     }
@@ -127,6 +137,7 @@ impl ToolKind {
             Self::Arrow => Box::<ArrowTool>::default(),
             Self::Rectangle => Box::<RectangleTool>::default(),
             Self::Ellipse => Box::<EllipseTool>::default(),
+            Self::Pen => Box::<PenTool>::default(),
             Self::Text => Box::<TextTool>::default(),
         }
     }

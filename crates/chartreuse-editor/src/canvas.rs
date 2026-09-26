@@ -35,14 +35,17 @@
 //! point `p` is at `origin + p × scale`, and document lengths are multiplied
 //! by `scale`. Per annotation, in the annotation's color:
 //!
-//! - Strokes (a line, an arrow's shaft, a rectangle's or ellipse's outline)
-//!   are `stroke_width` wide, centered on the geometry, with round caps and
-//!   round joins. A zero-length stroke is a disc `stroke_width` across.
+//! - Strokes (a line, an arrow's shaft, a rectangle's or ellipse's outline, a
+//!   pen's path) are `stroke_width` wide, centered on the geometry, with
+//!   round caps and round joins. A zero-length stroke is a disc
+//!   `stroke_width` across.
 //! - An arrow is its shaft stroked from `start` to [`ArrowHead::base`], then
 //!   the head triangle `[tip, left, right]` filled (never stroked).
 //! - A rectangle is the closed outline through [`Rect::corners`].
 //! - An ellipse is the closed path of the Béziers of [`Ellipse::curves`];
 //!   one of zero size is a dot.
+//! - A pen stroke is the open path through its points; one whose points all
+//!   coincide is a dot.
 //! - Text is iced canvas text: shaped by cosmic-text and rasterized by the
 //!   renderer's glyph cache, in [`font::FONT`], at `font_size` with a line
 //!   height of `font_size × Text::LINE_HEIGHT` (both × `scale`), the layout

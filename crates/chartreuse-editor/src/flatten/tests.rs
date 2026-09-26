@@ -5,8 +5,8 @@ use chartreuse_core::image::Image;
 use super::*;
 use crate::font;
 use crate::model::{
-    distance_to_ellipse, distance_to_segment, distance_to_triangle, Arrow, Ellipse, Line, Rect,
-    Rectangle, Style, Text,
+    distance_to_ellipse, distance_to_polyline, distance_to_segment, distance_to_triangle, Arrow,
+    Ellipse, Line, Polyline, Rect, Rectangle, Style, Text,
 };
 
 /// How far outside a shape's edge a pixel's center can be and still be
@@ -114,6 +114,33 @@ fn an_ellipse_is_its_outline_stroked() {
 }
 
 #[test]
+fn a_pen_stroke_is_its_path_stroked_with_round_joins() {
+    let image = base(70, 50);
+    let points: Vec<_> = [
+        (5.0, 40.0),
+        (20.5, 8.0),
+        (34.0, 42.25),
+        (52.0, 10.0),
+        (66.0, 30.0),
+    ]
+    .into_iter()
+    .map(|(x, y)| Point::new(x, y))
+    .collect();
+    let result = flattened(
+        image.clone(),
+        [(
+            Shape::Pen(Polyline {
+                points: points.clone(),
+            }),
+            style(BLUE, 5.0),
+        )],
+    );
+    assert_covers(&image, &result, BLUE, |p| {
+        distance_to_polyline(p, &points) - 2.5
+    });
+}
+
+#[test]
 fn an_arrow_is_a_shaft_to_the_head_base_and_a_filled_head() {
     let image = base(80, 50);
     let arrow = Arrow {
@@ -148,6 +175,9 @@ fn zero_length_strokes_are_discs_and_zero_width_draws_nothing() {
         }),
         Shape::Rectangle(Rectangle { rect: point }),
         Shape::Ellipse(Ellipse { rect: point }),
+        Shape::Pen(Polyline {
+            points: vec![center, center],
+        }),
     ] {
         let result = flattened(image.clone(), [(shape.clone(), style(BLUE, 10.0))]);
         assert_covers(&image, &result, BLUE, |p| (p - center).length() - 5.0);
@@ -244,8 +274,9 @@ mod canvas {
     use iced_runtime::user_interface::{self, UserInterface};
 
     use super::*;
+    use crate::canvas::InputKind;
     use crate::canvas::MARGIN;
-    use crate::editor::testing::{self, at, click, drag, named, type_text};
+    use crate::editor::testing::{self, at, click, drag, input, named, press, type_text};
     use crate::tools::ToolKind;
     use crate::{Editor, Message};
 
@@ -308,6 +339,43 @@ mod canvas {
         deselect(editor);
     }
 
+    /// A freehand stroke with `tool` through canvas `points`.
+    fn stroke(
+        editor: &mut Editor,
+        tool: ToolKind,
+        color: Rgba8,
+        width: f32,
+        points: &[iced::Point],
+    ) {
+        editor.update(Message::Color(color));
+        editor.update(Message::StrokeWidth(width));
+        editor.update(Message::Tool(tool));
+        let [first, rest @ ..] = points else {
+            unreachable!()
+        };
+        press(editor, *first, 1);
+        for &position in rest {
+            input(editor, InputKind::Move { position });
+        }
+        input(
+            editor,
+            InputKind::Release {
+                position: points[points.len() - 1],
+            },
+        );
+        deselect(editor);
+    }
+
+    /// Canvas points along a wave from document `(x0, y)` to `(x1, y)`.
+    fn wave(x0: f32, x1: f32, y: f32, amplitude: f32) -> Vec<iced::Point> {
+        (0..=60)
+            .map(|i| {
+                let t = i as f32 / 60.0;
+                at(x0 + (x1 - x0) * t, y + amplitude * (t * 12.0).sin())
+            })
+            .collect()
+    }
+
     #[test]
     fn flatten_matches_the_canvas_at_actual_size() {
         // iced's tiny-skia renderer draws the canvas's base image one pixel
@@ -353,6 +421,13 @@ mod canvas {
             at(250.0, 20.0),
             at(390.25, 110.5),
         );
+        stroke(
+            &mut editor,
+            ToolKind::Pen,
+            Rgba8::rgb(175, 82, 222),
+            4.0,
+            &wave(20.0, 200.0, 280.0, 12.0),
+        );
 
         editor.update(Message::Color(Rgba8::rgb(250, 250, 250)));
         editor.update(Message::FontSize(30.0));
@@ -371,7 +446,7 @@ mod canvas {
             at(140.0, 200.0),
             at(380.0, 230.0),
         );
-        assert_eq!(editor.document().annotations().len(), 6);
+        assert_eq!(editor.document().annotations().len(), 7);
 
         let flat = flatten(editor.document()).unwrap();
         let canvas = canvas_image(&editor);

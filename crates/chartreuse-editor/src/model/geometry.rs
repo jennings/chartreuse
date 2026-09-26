@@ -293,6 +293,20 @@ pub fn distance_to_segment(point: Point, start: Point, end: Point) -> f32 {
     point.distance(start + along * t)
 }
 
+/// The distance from `point` to the closest point of the path through
+/// `points` in order (a single point is itself; no points is infinitely far).
+#[must_use]
+pub fn distance_to_polyline(point: Point, points: &[Point]) -> f32 {
+    match points {
+        [] => f32::INFINITY,
+        [only] => point.distance(*only),
+        _ => points
+            .windows(2)
+            .map(|pair| distance_to_segment(point, pair[0], pair[1]))
+            .fold(f32::INFINITY, f32::min),
+    }
+}
+
 /// The distance from `point` to the filled triangle `corners`: zero inside or on
 /// an edge, otherwise the distance to the nearest edge. Works for either
 /// winding and for degenerate (collinear) triangles.
