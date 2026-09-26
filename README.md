@@ -4,6 +4,73 @@ A cross-platform screenshot and annotation tool that lives in the menu bar. See
 [PLAN.md](PLAN.md) for what it does and how it is built, and [TASKS.md](TASKS.md) for
 the build checklist.
 
+## Command line
+
+```sh
+chartreuse                     # start Chartreuse in the menu bar or tray
+chartreuse capture display     # capture the whole desktop
+chartreuse capture window      # capture the window you click
+chartreuse capture rectangle   # capture the rectangle you drag
+chartreuse open <file>         # open an image file in an editor window
+chartreuse --help              # or --version
+```
+
+One Chartreuse runs per user (and per flavor: a development build runs beside a
+release). A command given while it runs is handed to it, and the command line exits:
+with status 0 once Chartreuse has taken the command, or 1 with the reason (a capture
+already in progress, a file that cannot be opened); a usage error exits with 2. If
+Chartreuse is not running, the command starts it, and that process stays running as
+Chartreuse. Commands travel over a per-user channel:
+`~/Library/Caches/<bundle id>/ipc.sock` on macOS,
+`$XDG_RUNTIME_DIR/<bundle id>/ipc.sock` on Linux, and the named pipe
+`\\.\pipe\<bundle id>-<user>` on Windows.
+
+The command line is the executable itself. On macOS that is the one inside the
+bundle, run directly or through a symlink:
+
+```sh
+ln -s /Applications/Chartreuse.app/Contents/MacOS/chartreuse /usr/local/bin/chartreuse
+"target/debug/Chartreuse Dev.app/Contents/MacOS/chartreuse" capture window  # dev build
+```
+
+Starting the app from Finder, the Dock, `open`, or a login item goes through
+LaunchServices, which never starts a second copy and does not pass `open --args`
+arguments to a running one; use the executable for commands. Keep Chartreuse running
+(for example as a login item) before using them: a copy started from a terminal runs
+as the terminal's child, and macOS asks for, and checks, the terminal's Screen
+Recording permission instead of Chartreuse's.
+
+### Binding a desktop shortcut
+
+Chartreuse registers global hotkeys itself where the platform lets it. Where it
+cannot, notably on Wayland compositors without the GlobalShortcuts portal (such as
+Sway and other wlroots compositors), bind a desktop shortcut to the command line.
+Use the full path to the executable if it is not on the shortcut daemon's `PATH`.
+
+- **GNOME**: *Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts →
+  Add Shortcut*, with the command `chartreuse capture rectangle`.
+- **KDE Plasma**: *System Settings → Keyboard → Shortcuts → Add New → Command or
+  Script…*, with the command `chartreuse capture rectangle`, then assign the key.
+  (Plasma 5: *Custom Shortcuts → Edit → New → Global Shortcut → Command/URL*.)
+- **Sway** (`~/.config/sway/config`):
+
+  ```
+  bindsym $mod+Shift+4 exec chartreuse capture rectangle
+  ```
+
+- **Hyprland** (`~/.config/hypr/hyprland.conf`):
+
+  ```
+  bind = SUPER SHIFT, 4, exec, chartreuse capture rectangle
+  ```
+
+- **Windows**: right-click the desktop, *New → Shortcut*, with the location
+  `"C:\path\to\chartreuse.exe" capture rectangle`. In the shortcut's *Properties*,
+  set a *Shortcut key* (Windows makes it Ctrl+Alt+*key*). Windows honors shortcut
+  keys only for shortcuts on the desktop or in the Start menu folder.
+- **macOS**: Chartreuse's own hotkeys cover this. Launchers such as Shortcuts or
+  Raycast can run the bundle's executable as above.
+
 ## Development setup (macOS)
 
 macOS ties the Screen Recording permission to an app's code signature, so

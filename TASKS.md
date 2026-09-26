@@ -433,9 +433,9 @@ Depends on: Stage 2 integration complete. Owns: `chartreuse-platform/src/linux/`
 Depends on: Stage 2 integration complete. Owns: an `ipc` module in the app crate and the
 CLI argument parsing. It can run in parallel with 4A and 4B.
 
-- [ ] Single-instance detection and an IPC channel to the running instance
-- [ ] `chartreuse capture {display,window,rectangle}` and `chartreuse open <file>`
-- [ ] Document binding a desktop shortcut to the CLI
+- [x] Single-instance detection and an IPC channel to the running instance
+- [x] `chartreuse capture {display,window,rectangle}` and `chartreuse open <file>`
+- [x] Document binding a desktop shortcut to the CLI
 
 ## Stage 5 — Packaging (M10, parallel per platform)
 
