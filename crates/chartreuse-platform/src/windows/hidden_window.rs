@@ -17,7 +17,7 @@ use ::windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use ::windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, RegisterClassExW,
     SetWindowLongPtrW, CREATESTRUCTW, GWLP_USERDATA, HWND_MESSAGE, WINDOW_EX_STYLE, WM_NCCREATE,
-    WNDCLASSEXW, WS_OVERLAPPED,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 use chartreuse_core::Result;
 
@@ -30,6 +30,17 @@ pub(super) trait Handler: 'static {
 
     /// Handles `message`, or returns `None` to leave it to `DefWindowProcW`.
     fn handle(&self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT>;
+}
+
+/// Where a [`HiddenWindow`] lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+    /// A message-only window (`HWND_MESSAGE`): receives posted and sent messages
+    /// only, not broadcasts.
+    MessageOnly,
+    /// A top-level window that is never shown: also receives broadcasts such as
+    /// `TaskbarCreated`, and can become the foreground window for a popup menu.
+    TopLevel,
 }
 
 /// An invisible window owning its [`Handler`]. Dropping it destroys the window.
@@ -50,9 +61,7 @@ impl<H: Handler> std::fmt::Debug for HiddenWindow<H> {
 }
 
 impl<H: Handler> HiddenWindow<H> {
-    /// Creates a message-only window (`HWND_MESSAGE`), which receives posted and
-    /// sent messages but no broadcasts.
-    pub(super) fn new(handler: H) -> Result<Self> {
+    pub(super) fn new(kind: Kind, handler: H) -> Result<Self> {
         let class = wide(H::CLASS);
         // SAFETY: a null module name means this executable.
         let instance = unsafe { GetModuleHandleW(None) }
@@ -78,11 +87,15 @@ impl<H: Handler> HiddenWindow<H> {
         }
 
         let handler = Box::into_raw(Box::new(handler));
+        let (ex_style, parent) = match kind {
+            Kind::MessageOnly => (WINDOW_EX_STYLE::default(), Some(HWND_MESSAGE)),
+            Kind::TopLevel => (WS_EX_TOOLWINDOW, None),
+        };
         // SAFETY: the class is registered; `handler` stays valid until the window
         // is destroyed (see `Drop`), and WM_NCCREATE stores it for `window_proc`.
         let created = unsafe {
             CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
+                ex_style,
                 PCWSTR(class.as_ptr()),
                 PCWSTR(class.as_ptr()),
                 WS_OVERLAPPED,
@@ -90,7 +103,7 @@ impl<H: Handler> HiddenWindow<H> {
                 0,
                 0,
                 0,
-                Some(HWND_MESSAGE),
+                parent,
                 None,
                 Some(instance.into()),
                 Some(handler.cast::<c_void>().cast_const()),
@@ -112,6 +125,11 @@ impl<H: Handler> HiddenWindow<H> {
 
     pub(super) fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    pub(super) fn handler(&self) -> &H {
+        // SAFETY: owned by `self` and freed only in `drop`.
+        unsafe { &*self.handler }
     }
 }
 

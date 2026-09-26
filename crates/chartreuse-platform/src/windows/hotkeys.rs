@@ -22,7 +22,7 @@ use ::windows::Win32::UI::WindowsAndMessaging::WM_HOTKEY;
 use chartreuse_core::hotkey::Hotkey;
 use chartreuse_core::{Error, Result};
 
-use super::hidden_window::{Handler, HiddenWindow};
+use super::hidden_window::{Handler, HiddenWindow, Kind};
 use super::keys::{key_code, modifier_flags, KeyCode};
 use crate::event::{self, EventSender, Registration};
 use crate::hotkeys::{HotkeyBinding, HotkeyEvent, HotkeyRegistration, Hotkeys};
@@ -40,10 +40,13 @@ impl WindowsHotkeys {
 impl Hotkeys for WindowsHotkeys {
     fn register(&self, bindings: &[HotkeyBinding]) -> Result<HotkeyRegistration> {
         let (sender, events) = event::channel();
-        let window = HiddenWindow::new(Presses {
-            sender,
-            bindings: bindings.to_vec(),
-        })?;
+        let window = HiddenWindow::new(
+            Kind::MessageOnly,
+            Presses {
+                sender,
+                bindings: bindings.to_vec(),
+            },
+        )?;
         let mut registered = Registered {
             window,
             ids: Vec::new(),

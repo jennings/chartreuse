@@ -31,9 +31,11 @@ mod window_list;
 
 #[cfg(windows)]
 mod hidden_window;
+mod ico;
 mod keys;
 mod layout;
 mod pixels;
+mod tray_menu;
 #[cfg(windows)]
 mod util;
 mod window_filter;
