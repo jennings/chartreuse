@@ -19,10 +19,9 @@ use std::time::Duration;
 use chartreuse_core::display::{DisplayId, DisplayInfo, DisplayLayout};
 use chartreuse_core::flavor;
 use chartreuse_core::geometry::LogicalRect;
-use chartreuse_overlay::rectangle::{
-    frozen_image, output_grid, Input, Outcome, RectangleOverlay, Selection,
-};
+use chartreuse_overlay::rectangle::{output_grid, Input, Outcome, RectangleOverlay, Selection};
 use chartreuse_overlay::setup::{self, OverlayWindows, Styled};
+use chartreuse_overlay::shared::frozen_image;
 use chartreuse_platform::fake::test_pattern;
 use chartreuse_platform::StatusItemHandle;
 use iced::widget::image::Handle;

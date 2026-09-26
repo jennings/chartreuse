@@ -30,9 +30,8 @@ use chartreuse_core::flavor;
 use chartreuse_core::geometry::{LogicalPoint, LogicalRect, PhysicalSize};
 use chartreuse_core::image::Image;
 use chartreuse_imaging::{composite_at, encode, Format};
-use chartreuse_overlay::rectangle::{
-    frozen_image, output_grid, Input, Outcome, RectangleOverlay, Selection,
-};
+use chartreuse_overlay::rectangle::{output_grid, Input, Outcome, RectangleOverlay, Selection};
+use chartreuse_overlay::shared::frozen_image;
 use chartreuse_platform::fake::Fake;
 use chartreuse_platform::DisplayCapture;
 use iced::widget::image::Handle;

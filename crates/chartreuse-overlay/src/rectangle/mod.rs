@@ -15,6 +15,7 @@
 //!
 //! ```ignore
 //! // Opening: after capturing every display, with `layout` from the same displays.
+//! // `frozen_image` is `crate::shared::frozen_image`.
 //! state.selection = Selection::new(layout.clone());
 //! state.images = captures.iter().map(|c| frozen_image(c.image.clone())).collect();
 //!
@@ -51,5 +52,5 @@
 mod canvas;
 mod selection;
 
-pub use canvas::{frozen_image, PointerState, Projection, RectangleOverlay, DIM};
+pub use canvas::RectangleOverlay;
 pub use selection::{output_grid, Input, Outcome, Phase, Selection, DRAG_THRESHOLD};
