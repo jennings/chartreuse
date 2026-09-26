@@ -384,18 +384,21 @@ with one integration pass.
 
 Depends on: Stage 2 integration complete. Owns: `chartreuse-platform/src/windows/`
 
-- [ ] Per-Monitor DPI Awareness v2 manifest; displays via `EnumDisplayMonitors` and
+- [x] Per-Monitor DPI Awareness v2 manifest; displays via `EnumDisplayMonitors` and
       `GetDpiForMonitor`
-- [ ] Display capture with Windows.Graphics.Capture, falling back to DXGI or `BitBlt`
-- [ ] Window enumeration using DWM extended frame bounds, skipping cloaked windows
-- [ ] Window capture with WGC `CreateForWindow`, falling back to `PrintWindow`
-- [ ] Overlay window style: `WS_EX_TOPMOST` and `WS_EX_TOOLWINDOW`
-- [ ] `RegisterHotKey`
-- [ ] `Shell_NotifyIcon` tray, with no taskbar entry
-- [ ] Clipboard with `CF_DIBV5` and a registered PNG format
-- [ ] `IFileOpenDialog` / `IFileSaveDialog`
+- [x] Display capture with Windows.Graphics.Capture, falling back to DXGI or `BitBlt`
+- [x] Window enumeration using DWM extended frame bounds, skipping cloaked windows
+- [x] Window capture with WGC `CreateForWindow`, falling back to `PrintWindow`
+- [x] Overlay window style: `WS_EX_TOPMOST` and `WS_EX_TOOLWINDOW`
+- [x] `RegisterHotKey`
+- [x] `Shell_NotifyIcon` tray, with no taskbar entry
+- [x] Clipboard with `CF_DIBV5` and a registered PNG format
+- [x] `IFileOpenDialog` / `IFileSaveDialog`
 - [ ] Launch at login using the `Run` key (if 3C is in scope)
 - [ ] Integration pass: every M2–M7 flow works on Windows
+  - [ ] Overlay placement on mixed-DPI setups: `chartreuse-overlay::setup` uses logical
+        `Position::Specific`, which winit converts with one scale factor on Windows;
+        place overlays in physical pixels per monitor
 
 ### 4B — Linux (M9)
 
