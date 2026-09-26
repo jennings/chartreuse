@@ -29,6 +29,9 @@ mod status_item;
 #[cfg(windows)]
 mod window_list;
 
+#[cfg(windows)]
+mod hidden_window;
+mod keys;
 mod layout;
 mod pixels;
 #[cfg(windows)]
