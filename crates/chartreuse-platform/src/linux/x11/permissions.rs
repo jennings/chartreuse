@@ -1,6 +1,6 @@
-//! X11: privacy permissions. Implemented by track 4B.
-//!
-//! Until then every call fails with [`Error::Unsupported`].
+//! X11: privacy permissions. X11 has none: every client may read the screen
+//! and grab keys, so screen recording is always granted and there is no
+//! settings page for it.
 
 use chartreuse_core::permission::{Permission, PermissionStatus};
 use chartreuse_core::{Error, Result};
@@ -19,14 +19,16 @@ impl X11Permissions {
 
 impl Permissions for X11Permissions {
     fn status(&self, _permission: Permission) -> Result<PermissionStatus> {
-        Err(Error::Unsupported("permission checking"))
+        Ok(PermissionStatus::Granted)
     }
 
-    fn request(&self, _permission: Permission) -> Result<PermissionStatus> {
-        Err(Error::Unsupported("permission checking"))
+    fn request(&self, permission: Permission) -> Result<PermissionStatus> {
+        self.status(permission)
     }
 
     fn open_settings(&self, _permission: Permission) -> Result<()> {
-        Err(Error::Unsupported("permission checking"))
+        Err(Error::Unsupported(
+            "opening the screen capture permission settings",
+        ))
     }
 }
