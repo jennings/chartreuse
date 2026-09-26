@@ -6,7 +6,9 @@
     1024-unit canvas).
 
     The `accent` fill is the release accent; `cargo xtask` overrides it with a
-    style sheet for the development flavor. Rendered by `xtask/src/icon.rs`.
+    style sheet for the development flavor. The small Windows and Linux icons
+    crop the canvas to the body and turn off the `shadow` class's filter.
+    Rendered by `xtask/src/icon.rs`.
   -->
   <defs>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
@@ -19,7 +21,7 @@
       <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.3"/>
     </filter>
   </defs>
-  <rect class="accent" x="100" y="100" width="824" height="824" rx="185" fill="#80ff00" filter="url(#shadow)"/>
+  <rect class="accent shadow" x="100" y="100" width="824" height="824" rx="185" fill="#80ff00" filter="url(#shadow)"/>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
   <g fill="none" stroke="#161616" stroke-width="80" stroke-linecap="round" stroke-linejoin="round">
     <path d="M262 422V262H422M602 262H762V422M762 602V762H602M422 762H262V602"/>

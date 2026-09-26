@@ -5,8 +5,10 @@
 //!   Developer ID identity and a secure timestamp, zipped. Track 5A extends
 //!   this to a universal binary and a notarized disk image.
 //! - Windows and Linux: the optimized, release-flavor executable with the
-//!   license and readme, in a `.zip` (Windows) or `.tar.gz` (Linux) holding one
-//!   top-level directory. Tracks 5B and 5C add an installer and packages.
+//!   license, the readme, and the app icon, in a `.zip` (Windows) or `.tar.gz`
+//!   (Linux) holding one top-level directory. The icon is `chartreuse.ico` on
+//!   Windows and an `icons/hicolor/<size>x<size>/apps/<app ID>.png` tree on
+//!   Linux. Tracks 5B and 5C add an installer and packages, which install it.
 //!
 //! Archives are named `Chartreuse-<version>-<os>-<arch>`, with `-unsigned`
 //! appended for an ad-hoc signed macOS app.
@@ -17,6 +19,7 @@ use std::process::Command;
 use chartreuse_core::flavor::Flavor;
 
 use crate::bundle::{self, Bundle, Profile};
+use crate::icon;
 use crate::sign::{Identity, SignOptions};
 use crate::util::{run, target_dir, tool, workspace_root, Context, Error, Result};
 
@@ -29,6 +32,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Files from the workspace root shipped next to the Windows and Linux
 /// executable.
 const DOCUMENTS: [&str; 2] = ["LICENSE", "README.md"];
+
+/// The Windows app icon's name in the archive.
+const WINDOWS_ICON: &str = "chartreuse.ico";
 
 /// The release signing identity. A missing identity is an error naming the
 /// variable, unless an ad-hoc build was explicitly requested.
@@ -119,7 +125,7 @@ fn zip_app(app: &Path, archive: &Path) -> Result {
         .arg(archive))
 }
 
-/// Windows and Linux: the executable and [`DOCUMENTS`], archived.
+/// Windows and Linux: the executable, [`DOCUMENTS`], and the app icon, archived.
 fn release_executable(os: &str, dist: &Path, extension: &str) -> Result<PathBuf> {
     bundle::build_chartreuse(Profile::Release, Flavor::Release)?;
     let profile_dir = target_dir().join(Profile::Release.dir_name());
@@ -137,6 +143,16 @@ fn release_executable(os: &str, dist: &Path, extension: &str) -> Result<PathBuf>
     for (from, name) in files {
         std::fs::copy(&from, staging.join(name))
             .context(|| format!("copying {}", from.display()))?;
+    }
+    let flavor = Flavor::Release;
+    match os {
+        "windows" => icon::build_ico(flavor.accent(), &staging.join(WINDOWS_ICON))?,
+        "linux" => icon::write_linux_icons(
+            flavor.accent(),
+            &staging.join("icons").join("hicolor"),
+            flavor.bundle_id(),
+        )?,
+        _ => {}
     }
 
     let archive = dist.join(format!("{stem}.{extension}"));

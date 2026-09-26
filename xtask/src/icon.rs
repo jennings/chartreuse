@@ -1,8 +1,11 @@
 //! The app icon, rendered from `assets/icon/app-icon.svg` with resvg in the
-//! flavor's accent at every `.iconset` size, and packed into an `.icns` with
-//! `iconutil`.
+//! flavor's accent, and packed per platform: a macOS `.icns` (an `.iconset`
+//! packed with `iconutil`), a Windows `.ico`, and Linux PNGs in the freedesktop
+//! `hicolor` layout. The Windows and Linux icons up to
+//! [`SMALL_ICON_MAX_SIZE`] fill the image edge to edge without the macOS grid
+//! margin and drop shadow.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chartreuse_core::color::Rgba8;
 use resvg::{tiny_skia, usvg};
@@ -27,6 +30,23 @@ pub const ICONSET: [(&str, u32); 10] = [
     ("icon_512x512@2x.png", 1024),
 ];
 
+/// The pixel sizes in the Windows `.ico`: the shell's small, list, and
+/// large icons at common scale factors, and the 256-pixel jumbo icon.
+pub const ICO_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 256];
+
+/// The pixel sizes of the Linux `hicolor` icons.
+pub const LINUX_SIZES: [u32; 9] = [16, 22, 24, 32, 48, 64, 128, 256, 512];
+
+/// The largest image an `.ico` can hold: its directory stores each side in a
+/// byte, with 0 meaning 256.
+const ICO_MAX_SIZE: u32 = 256;
+
+/// The largest Windows and Linux app icon rendered with
+/// [`render_small_app_icon`]: at these sizes the shell and panels expect the
+/// icon to fill its image, and the macOS grid margin and drop shadow would
+/// shrink and blur the mark. Larger sizes keep the full app icon.
+pub const SMALL_ICON_MAX_SIZE: u32 = 48;
+
 /// A square image in straight-alpha RGBA8.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
@@ -35,9 +55,28 @@ pub struct Image {
     pub rgba: Vec<u8>,
 }
 
-/// Renders a square `svg` at `size × size` pixels, its canvas scaled to fit.
-/// `style_sheet` is CSS applied over the document.
-fn render_svg(svg: &str, style_sheet: Option<String>, size: u32) -> Result<Image> {
+/// A square region of an SVG canvas, in user units.
+#[derive(Debug, Clone, Copy)]
+struct Square {
+    origin: f32,
+    side: f32,
+}
+
+/// The app icon's body on its 1024-unit canvas: the rounded square of the
+/// macOS icon grid, which the small icons fill edge to edge.
+const APP_ICON_BODY: Square = Square {
+    origin: 100.0,
+    side: 824.0,
+};
+
+/// Renders the `view` square of `svg` (by default, its whole square canvas) at
+/// `size × size` pixels. `style_sheet` is CSS applied over the document.
+fn render_svg(
+    svg: &str,
+    style_sheet: Option<String>,
+    view: Option<Square>,
+    size: u32,
+) -> Result<Image> {
     let options = usvg::Options {
         style_sheet,
         ..usvg::Options::default()
@@ -46,10 +85,15 @@ fn render_svg(svg: &str, style_sheet: Option<String>, size: u32) -> Result<Image
         .map_err(|error| Error(format!("parsing an icon SVG: {error}")))?;
     let mut pixmap = tiny_skia::Pixmap::new(size, size)
         .ok_or_else(|| Error(format!("cannot render an icon at {size}×{size}")))?;
-    let scale = size as f32 / tree.size().width();
+    let view = view.unwrap_or(Square {
+        origin: 0.0,
+        side: tree.size().width(),
+    });
+    let scale = size as f32 / view.side;
+    let shift = -view.origin * scale;
     resvg::render(
         &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
+        tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, shift, shift),
         &mut pixmap.as_mut(),
     );
     let rgba = pixmap
@@ -71,7 +115,26 @@ fn accent_style_sheet(accent: Rgba8) -> String {
 
 /// Renders the app icon in `accent` at `size × size` pixels.
 pub fn render_app_icon(size: u32, accent: Rgba8) -> Result<Image> {
-    render_svg(APP_ICON_SVG, Some(accent_style_sheet(accent)), size)
+    render_svg(APP_ICON_SVG, Some(accent_style_sheet(accent)), None, size)
+}
+
+/// Renders the app icon for small sizes in `accent` at `size × size` pixels:
+/// its body without the drop shadow, filling the image, so the mark stays
+/// legible at 16 pixels.
+pub fn render_small_app_icon(size: u32, accent: Rgba8) -> Result<Image> {
+    let style_sheet = format!("{} .shadow {{ filter: none; }}", accent_style_sheet(accent));
+    render_svg(APP_ICON_SVG, Some(style_sheet), Some(APP_ICON_BODY), size)
+}
+
+/// Renders the Windows or Linux app icon in `accent` at `size × size` pixels:
+/// [`render_small_app_icon`] up to [`SMALL_ICON_MAX_SIZE`], and the full app
+/// icon above it.
+pub fn render_windows_linux_icon(size: u32, accent: Rgba8) -> Result<Image> {
+    if size <= SMALL_ICON_MAX_SIZE {
+        render_small_app_icon(size, accent)
+    } else {
+        render_app_icon(size, accent)
+    }
 }
 
 /// Encodes an image as an RGBA8 PNG.
@@ -89,6 +152,52 @@ fn encode_png(image: &Image) -> Result<Vec<u8>> {
         })
         .map_err(|error| Error(format!("encoding a {size}×{size} PNG: {error}")))?;
     Ok(bytes)
+}
+
+/// Packs `images` into an `.ico`, each stored as a PNG (which Windows reads at
+/// every size since Vista), in the order given.
+pub fn encode_ico(images: &[Image]) -> Result<Vec<u8>> {
+    const HEADER_LEN: usize = 6;
+    const ENTRY_LEN: usize = 16;
+    let count =
+        u16::try_from(images.len()).map_err(|_| Error("too many images for an .ico".into()))?;
+    let pngs = images
+        .iter()
+        .map(|image| {
+            if image.size == 0 || image.size > ICO_MAX_SIZE {
+                return Err(Error(format!(
+                    "an .ico cannot hold a {0}×{0} image",
+                    image.size
+                )));
+            }
+            encode_png(image)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let directory_len = HEADER_LEN + ENTRY_LEN * pngs.len();
+    let mut ico = Vec::with_capacity(directory_len + pngs.iter().map(Vec::len).sum::<usize>());
+    // ICONDIR: reserved, type 1 (icon), image count.
+    for field in [0, 1, count] {
+        ico.extend_from_slice(&field.to_le_bytes());
+    }
+    let mut offset = directory_len;
+    for (image, png) in images.iter().zip(&pngs) {
+        // ICONDIRENTRY: width and height (0 means 256), no palette, reserved,
+        // one color plane, 32 bits per pixel, then the PNG's length and offset.
+        let side = u8::try_from(image.size).unwrap_or(0);
+        ico.extend_from_slice(&[side, side, 0, 0]);
+        ico.extend_from_slice(&1u16.to_le_bytes());
+        ico.extend_from_slice(&32u16.to_le_bytes());
+        for field in [png.len(), offset] {
+            let field = u32::try_from(field).map_err(|_| Error("an .ico over 4 GiB".into()))?;
+            ico.extend_from_slice(&field.to_le_bytes());
+        }
+        offset += png.len();
+    }
+    for png in &pngs {
+        ico.extend_from_slice(png);
+    }
+    Ok(ico)
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result {
@@ -118,6 +227,43 @@ pub fn build_icns(accent: Rgba8, work_dir: &Path, icns: &Path) -> Result {
         .arg(&iconset))
 }
 
+/// Writes the app icon in `accent` at [`ICO_SIZES`] to the `.ico` at `path`,
+/// rendered with [`render_windows_linux_icon`].
+///
+/// The executable does not embed it as a resource yet: that takes a build
+/// script and the Windows SDK's resource compiler, which track 5B adds along
+/// with the installer that also uses this file.
+pub fn build_ico(accent: Rgba8, path: &Path) -> Result {
+    let images = ICO_SIZES
+        .into_iter()
+        .map(|size| render_windows_linux_icon(size, accent))
+        .collect::<Result<Vec<_>>>()?;
+    write_file(path, &encode_ico(&images)?)
+}
+
+/// Where the `size`-pixel icon named `name` goes in the `hicolor` theme
+/// directory `hicolor` (`<size>x<size>/apps/<name>.png`).
+#[must_use]
+pub fn linux_icon_path(hicolor: &Path, size: u32, name: &str) -> PathBuf {
+    hicolor
+        .join(format!("{size}x{size}"))
+        .join("apps")
+        .join(format!("{name}.png"))
+}
+
+/// Writes the app icon in `accent` at [`LINUX_SIZES`] into the `hicolor`
+/// theme directory `hicolor`, named `name` (the app ID), rendered with
+/// [`render_windows_linux_icon`].
+pub fn write_linux_icons(accent: Rgba8, hicolor: &Path, name: &str) -> Result {
+    for size in LINUX_SIZES {
+        write_file(
+            &linux_icon_path(hicolor, size, name),
+            &encode_png(&render_windows_linux_icon(size, accent)?)?,
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use chartreuse_core::flavor::Flavor;
@@ -133,6 +279,49 @@ mod tests {
     /// Whether two colors differ by at most `tolerance` in every channel.
     fn close(a: [u8; 4], b: [u8; 4], tolerance: u8) -> bool {
         a.iter().zip(b).all(|(&a, b)| a.abs_diff(b) <= tolerance)
+    }
+
+    /// Decodes a square RGBA8 PNG.
+    fn decode_png(bytes: &[u8]) -> Image {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .unwrap();
+        let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut rgba).unwrap();
+        assert_eq!(
+            (info.color_type, info.bit_depth),
+            (png::ColorType::Rgba, png::BitDepth::Eight)
+        );
+        assert_eq!(info.width, info.height, "the PNG is square");
+        rgba.truncate(info.buffer_size());
+        Image {
+            size: info.width,
+            rgba,
+        }
+    }
+
+    /// Parses an `.ico` of PNG entries, checking its directory, into each
+    /// entry's side as stored (0 for 256) and its decoded image.
+    fn decode_ico(bytes: &[u8]) -> Vec<(u8, Image)> {
+        let u16_at = |i: usize| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
+        let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+        assert_eq!((u16_at(0), u16_at(2)), (0, 1), "an icon directory");
+        (0..usize::from(u16_at(4)))
+            .map(|n| {
+                let entry = 6 + 16 * n;
+                let [width, height, colors, reserved] = bytes[entry..entry + 4] else {
+                    unreachable!()
+                };
+                assert_eq!(width, height, "entry {n} is square");
+                assert_eq!((colors, reserved), (0, 0), "entry {n}");
+                assert_eq!((u16_at(entry + 4), u16_at(entry + 6)), (1, 32), "entry {n}");
+                let (len, offset) = (u32_at(entry + 8), u32_at(entry + 12));
+                let image = decode_png(&bytes[offset..offset + len]);
+                let stored = if image.size == 256 { 0 } else { image.size };
+                assert_eq!(u32::from(width), stored, "entry {n} records its size");
+                (width, image)
+            })
+            .collect()
     }
 
     #[test]
@@ -189,5 +378,73 @@ mod tests {
             let center = pixel(&icon, size / 2, size / 2);
             assert_eq!(center[3], 255, "{size}: the center is opaque");
         }
+    }
+
+    #[test]
+    fn small_app_icon_is_the_body_edge_to_edge_without_a_shadow() {
+        let size = 64;
+        let accent = Flavor::Development.accent();
+        let icon = render_small_app_icon(size, accent).unwrap();
+        let at = |x, y| pixel(&icon, x, y);
+        // The middle of the left edge, where the sheen fades out.
+        assert!(close(at(0, 32), accent.to_array(), 3), "{:?}", at(0, 32));
+        // 64 pixels put the corner radius at 14.4 pixels, centered on
+        // (14.4, 49.6) at the bottom left. Just past the corner, where the
+        // drop shadow would fall, and in the corner itself.
+        assert_eq!(at(3, 60)[3], 0, "no shadow past the rounded corner");
+        assert_eq!(at(0, 63)[3], 0, "the corner is transparent");
+    }
+
+    #[test]
+    fn windows_and_linux_icons_fill_the_image_only_at_small_sizes() {
+        let accent = Flavor::Release.accent();
+        for size in [16, SMALL_ICON_MAX_SIZE, 64, 256] {
+            let icon = render_windows_linux_icon(size, accent).unwrap();
+            // The middle of the left edge: the body at small sizes, the macOS
+            // grid margin above them.
+            let edge = pixel(&icon, 0, size / 2);
+            if size <= SMALL_ICON_MAX_SIZE {
+                assert!(close(edge, accent.to_array(), 3), "{size}: {edge:?}");
+            } else {
+                assert_eq!(edge[3], 0, "{size}: the margin is transparent");
+            }
+        }
+    }
+
+    #[test]
+    fn ico_directory_describes_every_image_in_order() {
+        let accent = Flavor::Release.accent();
+        let images: Vec<Image> = [16, 48, 256]
+            .into_iter()
+            .map(|size| render_app_icon(size, accent).unwrap())
+            .collect();
+
+        let entries = decode_ico(&encode_ico(&images).unwrap());
+
+        let sides: Vec<u8> = entries.iter().map(|(side, _)| *side).collect();
+        assert_eq!(sides, [16, 48, 0], "256 is stored as 0");
+        for ((_, decoded), image) in entries.iter().zip(&images) {
+            assert_eq!(decoded, image, "PNG entries are lossless");
+        }
+    }
+
+    #[test]
+    fn ico_rejects_images_it_cannot_describe() {
+        for size in [0, 257] {
+            let image = Image {
+                size,
+                rgba: vec![0; (size * size * 4) as usize],
+            };
+            let error = encode_ico(&[image]).unwrap_err();
+            assert!(error.0.contains(&format!("{size}×{size}")), "{error}");
+        }
+    }
+
+    #[test]
+    fn linux_icons_follow_the_hicolor_layout() {
+        assert_eq!(
+            linux_icon_path(Path::new("icons/hicolor"), 48, "io.jennings.chartreuse"),
+            Path::new("icons/hicolor/48x48/apps/io.jennings.chartreuse.png")
+        );
     }
 }
