@@ -581,6 +581,8 @@ name = "chartreuse-config"
 version = "0.1.0"
 dependencies = [
  "chartreuse-core",
+ "chartreuse-imaging",
+ "chrono",
 ]
 
 [[package]]

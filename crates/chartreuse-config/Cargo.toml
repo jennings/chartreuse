@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 chartreuse-core.workspace = true
+chartreuse-imaging.workspace = true
+chrono.workspace = true
 
 [lints]
 workspace = true
