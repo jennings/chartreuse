@@ -81,7 +81,8 @@ mod macos;
 #[cfg(any(target_os = "windows", test))]
 mod windows;
 
-#[cfg(all(unix, not(target_os = "macos")))]
+// On other hosts only its portable logic is compiled, for its unit tests.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
 mod linux;
 
 #[cfg(not(any(unix, windows)))]

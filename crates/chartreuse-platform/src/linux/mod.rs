@@ -1,11 +1,20 @@
 //! Linux and other free Unix desktops: an X11 and a Wayland backend, chosen at
 //! runtime from the session type.
+//!
+//! The backends' pure logic lives in [`logic`], which uses no Linux-only crate:
+//! test builds on other hosts compile it (and the session detection here), so
+//! its unit tests run on every development machine.
 
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+mod logic;
+#[cfg(all(unix, not(target_os = "macos")))]
 mod wayland;
+#[cfg(all(unix, not(target_os = "macos")))]
 mod x11;
 
 use std::ffi::OsStr;
 
+#[cfg(all(unix, not(target_os = "macos")))]
 use crate::Platform;
 
 /// The kind of graphical session Chartreuse runs in.
@@ -31,6 +40,7 @@ impl Session {
 }
 
 /// The backend for the current session.
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn platform() -> Platform {
     let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
     let xdg_session_type = std::env::var_os("XDG_SESSION_TYPE");
