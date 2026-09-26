@@ -4,18 +4,24 @@
 //! # Flow
 //!
 //! 1. The capture flow sends [`Message::OpenRectangle`] with the frozen
-//!    [`Snapshot`]. Its captures become image handles off the main thread
+//!    [`Snapshot`], or [`Message::OpenWindow`] with the snapshot and the window
+//!    list taken with it. Its captures become image handles off the main thread
 //!    ([`Message::Frozen`]), then one overlay window opens per captured display
 //!    ([`setup::open`]), each drawing its display's capture under one shared
 //!    [`Selector`] in global logical coordinates: a [`Selection`] drawn by
-//!    [`RectangleOverlay`].
+//!    [`RectangleOverlay`], or a [`WindowSelection`] drawn by [`WindowOverlay`].
+//!    The window selection highlights nothing until the pointer first moves:
+//!    the platform traits do not expose the pointer's position yet (macOS
+//!    could report it with `NSEvent.mouseLocation`, Windows with
+//!    `GetCursorPos`).
 //! 2. Every overlay's pointer and Escape input goes to that selector
-//!    ([`Message::Rectangle`]). Escape reaches the focused overlay only: the
-//!    platform style activates the app and makes each overlay key as it is
-//!    shown, and the primary display's overlay is focused as well
+//!    ([`Message::Rectangle`], [`Message::Window`]). Escape reaches the focused
+//!    overlay only: the platform style activates the app and makes each overlay
+//!    key as it is shown, and the primary display's overlay is focused as well
 //!    ([`window::gain_focus`]), for backends whose style cannot.
 //! 3. When the selection ends, every overlay closes and the capture flow hears
-//!    how: `capture::Message::Selected` with the rectangle on commit,
+//!    how: `capture::Message::Selected` with the rectangle or
+//!    `capture::Message::WindowSelected` with the window on commit,
 //!    `capture::Message::SelectionCancelled` on Escape. An overlay closed any
 //!    other way (by the OS) mid-selection cancels too.
 //!
@@ -25,9 +31,11 @@
 
 use chartreuse_core::display::{DisplayId, DisplayLayout};
 use chartreuse_core::flavor;
+use chartreuse_core::window::WindowInfo;
 use chartreuse_overlay::rectangle::{self, RectangleOverlay, Selection};
 use chartreuse_overlay::setup::{self, OverlayWindows, Styled};
 use chartreuse_overlay::shared;
+use chartreuse_overlay::window::{self as window_selection, WindowOverlay, WindowSelection};
 use iced::widget::image::Handle;
 use iced::widget::space;
 use iced::{window, Element, Subscription, Task};
@@ -57,6 +65,8 @@ impl State {
 pub enum Selector {
     /// Drag out a rectangle.
     Rectangle(Selection),
+    /// Click a window.
+    Window(WindowSelection),
 }
 
 impl Selector {
@@ -64,26 +74,42 @@ impl Selector {
     const fn layout(&self) -> &DisplayLayout {
         match self {
             Self::Rectangle(selection) => selection.layout(),
+            Self::Window(selection) => selection.layout(),
         }
     }
 
     /// Feeds rectangle input to a rectangle selection, returning what to tell
     /// the capture flow if it ended the selection.
     fn rectangle(&mut self, input: rectangle::Input) -> Option<capture::Message> {
-        let Self::Rectangle(selection) = self;
+        let Self::Rectangle(selection) = self else {
+            return None;
+        };
         selection.apply(input).map(|outcome| match outcome {
             rectangle::Outcome::Commit(rect) => capture::Message::Selected(rect),
             rectangle::Outcome::Cancel => capture::Message::SelectionCancelled,
         })
     }
 
+    /// Feeds window input to a window selection, returning what to tell the
+    /// capture flow if it ended the selection.
+    fn window(&mut self, input: window_selection::Input) -> Option<capture::Message> {
+        let Self::Window(selection) = self else {
+            return None;
+        };
+        selection.apply(input).map(|outcome| match outcome {
+            window_selection::Outcome::Commit(id) => capture::Message::WindowSelected(id),
+            window_selection::Outcome::Cancel => capture::Message::SelectionCancelled,
+        })
+    }
+
     /// Cancels the selection if it has not ended yet, returning what to tell
     /// the capture flow if so.
     fn cancel(&mut self) -> Option<capture::Message> {
-        let Self::Rectangle(selection) = self;
-        selection
-            .escape()
-            .map(|_| capture::Message::SelectionCancelled)
+        let cancelled = match self {
+            Self::Rectangle(selection) => selection.escape().is_some(),
+            Self::Window(selection) => selection.escape().is_some(),
+        };
+        cancelled.then_some(capture::Message::SelectionCancelled)
     }
 }
 
@@ -117,6 +143,12 @@ impl Session {
                 })
                 .view()
             }
+            Selector::Window(selection) => {
+                WindowOverlay::new(selection, info, image, accent, |input| {
+                    AppMessage::Overlay(Message::Window(input))
+                })
+                .view()
+            }
         })
     }
 }
@@ -126,6 +158,9 @@ impl Session {
 pub enum Message {
     /// Open the rectangle-selection overlays over a capture.
     OpenRectangle(Snapshot),
+    /// Open the window-selection overlays over a capture, choosing among the
+    /// windows listed with it (front to back).
+    OpenWindow(Snapshot, Vec<WindowInfo>),
     /// A capture's images are ready to draw, one per display in the selector's
     /// layout order: open its overlays.
     Frozen(Selector, Vec<Handle>),
@@ -133,6 +168,8 @@ pub enum Message {
     Styled(Styled),
     /// Pointer or Escape input from a rectangle overlay.
     Rectangle(rectangle::Input),
+    /// Pointer or Escape input from a window overlay.
+    Window(window_selection::Input),
 }
 
 pub fn boot(_app: &mut App) -> Task<AppMessage> {
@@ -145,9 +182,14 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
             Selector::Rectangle(Selection::new(snapshot.layout().clone())),
             snapshot,
         ),
+        Message::OpenWindow(snapshot, windows) => freeze(
+            Selector::Window(WindowSelection::new(snapshot.layout().clone(), windows)),
+            snapshot,
+        ),
         Message::Frozen(selector, images) => open(app, selector, images),
         Message::Styled(styled) => shown(app, styled),
         Message::Rectangle(input) => select(app, |selector| selector.rectangle(input)),
+        Message::Window(input) => select(app, |selector| selector.window(input)),
     }
 }
 
@@ -181,8 +223,8 @@ pub fn window_closed(app: &mut App, window: window::Id) -> Task<AppMessage> {
 
 /// Makes image handles of `snapshot`'s captures off the main thread, then
 /// reports them with `selector` as [`Message::Frozen`]. Each handle takes its
-/// display's pixels by value, so every capture is copied: the snapshot keeps
-/// its own for cropping.
+/// display's pixels by value, so every capture is copied: a rectangle capture
+/// keeps the snapshot for cropping.
 fn freeze(selector: Selector, snapshot: Snapshot) -> Task<AppMessage> {
     Task::perform(
         async move {

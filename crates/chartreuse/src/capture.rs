@@ -6,7 +6,9 @@
 //! 1. [`Message::Start`] (from the status item menu or a hotkey) passes the
 //!    Screen Recording gate ([`permission::ensure_screen_recording`]), then
 //!    captures every display through the platform
-//!    [`Capture`](chartreuse_platform::Capture) trait, off the main thread.
+//!    [`Capture`](chartreuse_platform::Capture) trait, off the main thread. A
+//!    window capture lists the windows
+//!    ([`WindowList`](chartreuse_platform::WindowList)) at the same time.
 //! 2. The captures arrive frozen, with the [`DisplayLayout`] they were taken
 //!    from, as a [`Snapshot`] in the [`Scene`] of [`Message::Captured`].
 //! 3. By mode:
@@ -20,7 +22,13 @@
 //!      [`Snapshot::composite`] off the main thread) and goes to
 //!      `export::Message::CopyAndSave` too. A cancelled selection
 //!      ([`Message::SelectionCancelled`]) discards the snapshot.
-//!    - **Window** is not implemented yet: `Start` logs and returns (I5).
+//!    - **Window**: the selection overlays show the snapshot and highlight the
+//!      window under the pointer (`overlay::Message::OpenWindow`). A committed
+//!      window ([`Message::WindowSelected`]) is captured directly, not cropped
+//!      from the snapshot: whole even where other windows covered it, with its
+//!      shadow and rounded corners. Its image goes to
+//!      `export::Message::CopyAndSave`. Cancelling ends the capture as for a
+//!      rectangle.
 //!
 //! One capture runs at a time, selection included: a `Start` while one is in
 //! progress is ignored.
@@ -29,7 +37,8 @@
 //!
 //! A capture that fails with `Error::PermissionDenied(Permission::ScreenRecording)`
 //! (which the platform also reports for captures that come back blank) opens the
-//! permission guidance ([`permission::show_guidance`]). Any other failure is
+//! permission guidance ([`permission::show_guidance`]). Any other failure,
+//! such as a selected window that closed before it could be captured, is
 //! reported with [`alert::report_error`].
 
 use std::sync::Arc;
@@ -39,10 +48,12 @@ use chartreuse_core::display::{DisplayLayout, PixelGrid};
 use chartreuse_core::geometry::LogicalRect;
 use chartreuse_core::image::Image;
 use chartreuse_core::permission::Permission;
+use chartreuse_core::window::{WindowId, WindowInfo};
 use chartreuse_core::{Error, Result};
 use chartreuse_imaging::Composite;
 use chartreuse_overlay::rectangle;
 use chartreuse_platform::DisplayCapture;
+use iced::futures::future::{self, FutureExt};
 use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
@@ -140,6 +151,9 @@ pub enum Scene {
     Display(Snapshot),
     /// Every display, to select a rectangle from.
     Rectangle(Snapshot),
+    /// Every display and the windows on them, front to back, to select a
+    /// window from.
+    Window(Snapshot, Vec<WindowInfo>),
 }
 
 /// This feature's messages ([`AppMessage::Capture`]).
@@ -152,6 +166,8 @@ pub enum Message {
     /// The user committed this rectangle (global logical coordinates) over the
     /// capture being selected from.
     Selected(LogicalRect),
+    /// The user selected this window.
+    WindowSelected(WindowId),
     /// The user cancelled the selection.
     SelectionCancelled,
     /// The image of the capture in progress is ready.
@@ -167,6 +183,7 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
         Message::Start(mode) => start(app, mode),
         Message::Captured(Ok(scene)) => captured(app, scene),
         Message::Selected(rect) => selected(app, &rect),
+        Message::WindowSelected(window) => window_selected(app, window),
         Message::SelectionCancelled => {
             tracing::info!("selection cancelled");
             app.capture.selecting = None;
@@ -199,23 +216,28 @@ fn start(app: &mut App, mode: CaptureMode) -> Task<AppMessage> {
         tracing::info!(%mode, %running, "a capture is already in progress; ignoring");
         return Task::none();
     }
-    let scene: fn(Snapshot) -> Scene = match mode {
-        CaptureMode::Display => Scene::Display,
-        CaptureMode::Rectangle => Scene::Rectangle,
-        CaptureMode::Window => {
-            tracing::info!("{mode}: not implemented yet");
-            return Task::none();
-        }
-    };
     if let Err(guidance) = permission::ensure_screen_recording(app) {
         return guidance;
     }
     app.capture.in_progress = Some(mode);
-    let capture = app.platform.capture.capture_displays();
-    Task::perform(
-        async move { capture.await.and_then(Snapshot::new).map(scene) },
-        |scene| AppMessage::Capture(Message::Captured(scene)),
-    )
+    let displays = app
+        .platform
+        .capture
+        .capture_displays()
+        .map(|captures| captures.and_then(Snapshot::new));
+    let scene = match mode {
+        CaptureMode::Display => displays
+            .map(|snapshot| snapshot.map(Scene::Display))
+            .boxed(),
+        CaptureMode::Rectangle => displays
+            .map(|snapshot| snapshot.map(Scene::Rectangle))
+            .boxed(),
+        // Listed with the captures, so the windows match what the overlays show.
+        CaptureMode::Window => future::try_join(displays, app.platform.window_list.windows())
+            .map(|joined| joined.map(|(snapshot, windows)| Scene::Window(snapshot, windows)))
+            .boxed(),
+    };
+    Task::perform(scene, |scene| AppMessage::Capture(Message::Captured(scene)))
 }
 
 fn captured(app: &mut App, scene: Scene) -> Task<AppMessage> {
@@ -232,6 +254,16 @@ fn captured(app: &mut App, scene: Scene) -> Task<AppMessage> {
             app.capture.selecting = Some(snapshot.clone());
             Task::done(AppMessage::Overlay(overlay::Message::OpenRectangle(
                 snapshot,
+            )))
+        }
+        Scene::Window(snapshot, windows) => {
+            tracing::debug!(
+                displays = snapshot.captures().len(),
+                windows = windows.len(),
+                "displays and windows captured to select from"
+            );
+            Task::done(AppMessage::Overlay(overlay::Message::OpenWindow(
+                snapshot, windows,
             )))
         }
     }
@@ -251,6 +283,17 @@ fn selected(app: &mut App, rect: &LogicalRect) -> Task<AppMessage> {
             Task::none()
         }
     }
+}
+
+/// Captures the committed `window` directly, off the main thread.
+fn window_selected(app: &App, window: WindowId) -> Task<AppMessage> {
+    if app.capture.in_progress != Some(CaptureMode::Window) {
+        return Task::none();
+    }
+    let capture = app.platform.capture.capture_window(window);
+    Task::perform(capture.map(|image| image.map(Arc::new)), |image| {
+        AppMessage::Capture(Message::Finished(image))
+    })
 }
 
 /// Runs `render` off the main thread, then reports its image as
@@ -281,10 +324,11 @@ mod tests {
     use chartreuse_core::display::{DisplayId, DisplayInfo};
     use chartreuse_core::geometry::{LogicalPoint, LogicalRect, PhysicalSize, ScaleFactor};
     use chartreuse_core::permission::PermissionStatus;
-    use chartreuse_core::window::WindowId;
+    use chartreuse_core::window::{WindowId, WindowOwner};
     use chartreuse_overlay::rectangle::Input;
+    use chartreuse_overlay::window::Input as WindowInput;
     use chartreuse_platform::fake::Fake;
-    use chartreuse_platform::{Capture, MenuAction};
+    use chartreuse_platform::{Capture, MenuAction, WindowList};
     use futures::executor::block_on;
     use futures::future::{self, BoxFuture, FutureExt};
     use futures::StreamExt;
@@ -306,6 +350,9 @@ mod tests {
     /// top-left at the global origin, and a 1× display up and to the left of it.
     /// Together they span (-4, -2) to (8, 6) in logical points, leaving a gap
     /// below the 1× display.
+    ///
+    /// Two windows: [`FRONT`] on the primary display, in front of [`BACK`],
+    /// which spans both displays.
     fn small_desktop() -> Fake {
         let display = |id, bounds: LogicalRect, scale: f64, is_primary| {
             let scale_factor = ScaleFactor::new(scale).unwrap();
@@ -323,8 +370,27 @@ mod tests {
                 display(1, LogicalRect::new(0.0, 0.0, 8.0, 6.0), 2.0, true),
                 display(2, LogicalRect::new(-4.0, -2.0, 4.0, 4.0), 1.0, false),
             ],
-            Vec::new(),
+            vec![
+                window(FRONT, 0, LogicalRect::new(1.0, 1.0, 4.0, 3.0)),
+                window(BACK, 1, LogicalRect::new(-3.0, -1.0, 6.0, 4.0)),
+            ],
         )
+    }
+
+    const FRONT: WindowId = WindowId(7);
+    const BACK: WindowId = WindowId(8);
+
+    fn window(id: WindowId, z_order: u32, bounds: LogicalRect) -> WindowInfo {
+        WindowInfo {
+            id,
+            title: Some(format!("Window {}", id.0)),
+            owner: WindowOwner {
+                name: "Test".into(),
+                pid: None,
+            },
+            bounds,
+            z_order,
+        }
     }
 
     fn start(app: &mut App, mode: CaptureMode) -> Vec<AppMessage> {
@@ -363,6 +429,29 @@ mod tests {
 
         fn capture_window(&self, _window: WindowId) -> BoxFuture<'static, Result<Image>> {
             future::ready(Err(Error::Unsupported("window capture"))).boxed()
+        }
+    }
+
+    /// The fake's display captures, with window captures that fail with the
+    /// error.
+    struct WindowFails(Fake, Error);
+
+    impl Capture for WindowFails {
+        fn capture_displays(&self) -> BoxFuture<'static, Result<Vec<DisplayCapture>>> {
+            self.0.capture_displays()
+        }
+
+        fn capture_window(&self, _window: WindowId) -> BoxFuture<'static, Result<Image>> {
+            future::ready(Err(self.1.clone())).boxed()
+        }
+    }
+
+    /// A window list that always fails with the error.
+    struct ListFails(Error);
+
+    impl WindowList for ListFails {
+        fn windows(&self) -> BoxFuture<'static, Result<Vec<WindowInfo>>> {
+            future::ready(Err(self.0.clone())).boxed()
         }
     }
 
@@ -446,7 +535,7 @@ mod tests {
         let (mut app, fake, saves) = app();
         fake.set_screen_recording(PermissionStatus::Denied);
 
-        for mode in [CaptureMode::Display, CaptureMode::Rectangle] {
+        for mode in CaptureMode::ALL {
             let handled = start(&mut app, mode);
             assert!(
                 !handled
@@ -507,16 +596,6 @@ mod tests {
         assert!(iced_runtime::task::into_stream(second).is_none());
     }
 
-    #[test]
-    fn window_captures_do_not_capture_yet() {
-        let (mut app, fake, saves) = app();
-        app.platform.capture = Box::new(Scripted(Err(Error::Platform("captured".into()))));
-        assert_eq!(start(&mut app, CaptureMode::Window).len(), 1);
-        assert_eq!(app.windows.len(), 0);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
-    }
-
     fn overlays(app: &App) -> Vec<iced::window::Id> {
         app.windows.of_kind(WindowKind::Overlay).collect()
     }
@@ -525,25 +604,157 @@ mod tests {
         let _ = app.settle(AppMessage::Overlay(overlay::Message::Rectangle(input)));
     }
 
-    /// Starts a rectangle capture of the small desktop.
-    fn start_rectangle() -> (App, Fake, tempfile::TempDir) {
+    fn pick(app: &mut App, input: WindowInput) {
+        let _ = app.settle(AppMessage::Overlay(overlay::Message::Window(input)));
+    }
+
+    /// Starts a capture of the small desktop.
+    fn start_small(mode: CaptureMode) -> (App, Fake, tempfile::TempDir) {
         let (mut app, _default_desktop, saves) = app();
         let fake = small_desktop();
         app.platform = fake.platform();
-        let _ = start(&mut app, CaptureMode::Rectangle);
+        let _ = start(&mut app, mode);
         (app, fake, saves)
+    }
+
+    /// Starts a rectangle capture of the small desktop.
+    fn start_rectangle() -> (App, Fake, tempfile::TempDir) {
+        start_small(CaptureMode::Rectangle)
+    }
+
+    /// The overlays' displays.
+    fn covered(app: &App) -> HashSet<DisplayId> {
+        overlays(app)
+            .into_iter()
+            .map(|window| app.overlay.display(window).expect("an overlay's display"))
+            .collect()
+    }
+
+    #[test]
+    fn a_window_capture_opens_one_overlay_per_display() {
+        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+
+        assert_eq!(overlays(&app).len(), 2);
+        assert_eq!(covered(&app), HashSet::from([DisplayId(1), DisplayId(2)]));
+        assert_eq!(app.capture.in_progress(), Some(CaptureMode::Window));
+        assert_eq!(fake.clipboard(), None, "nothing is exported before a click");
+
+        // One selection at a time.
+        let _ = start(&mut app, CaptureMode::Window);
+        let _ = start(&mut app, CaptureMode::Rectangle);
+        assert_eq!(overlays(&app).len(), 2);
+        assert_eq!(fake.clipboard(), None);
+        assert!(saved(saves.path()).is_empty());
+    }
+
+    #[test]
+    fn a_clicked_window_is_captured_directly_then_copied_and_saved() {
+        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+
+        // (6, 5) is on the primary display but on no window.
+        pick(&mut app, WindowInput::Move(LogicalPoint::new(6.0, 5.0)));
+        pick(&mut app, WindowInput::Click(LogicalPoint::new(6.0, 5.0)));
+        assert_eq!(overlays(&app).len(), 2, "a click on no window is ignored");
+        assert_eq!(fake.clipboard(), None);
+
+        // (2, 2) is on the front window, which covers the back one there.
+        pick(&mut app, WindowInput::Move(LogicalPoint::new(2.0, 2.0)));
+        pick(&mut app, WindowInput::Click(LogicalPoint::new(2.0, 2.0)));
+
+        assert!(overlays(&app).is_empty(), "the overlays closed");
+        let image = fake.clipboard().expect("the window was copied");
+        let direct = block_on(fake.capture_window(FRONT)).unwrap();
+        assert_eq!(image, direct, "the window's own capture, not a crop");
+        assert_eq!(image.size(), PhysicalSize::new(8, 6));
+
+        let files = saved(saves.path());
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(png_size(&files[0]), image.size());
+        assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(windows(&app, WindowKind::Alert), 0);
+    }
+
+    #[test]
+    fn escape_cancels_a_window_capture() {
+        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+        pick(&mut app, WindowInput::Move(LogicalPoint::new(2.0, 2.0)));
+        pick(&mut app, WindowInput::Escape);
+
+        assert!(overlays(&app).is_empty());
+        assert_eq!(app.capture.in_progress(), None);
+
+        // Input after the session ends goes nowhere.
+        pick(&mut app, WindowInput::Click(LogicalPoint::new(2.0, 2.0)));
+        assert_eq!(fake.clipboard(), None);
+        assert!(saved(saves.path()).is_empty());
+
+        let _ = start(&mut app, CaptureMode::Window);
+        assert_eq!(overlays(&app).len(), 2, "a new capture can start");
+    }
+
+    #[test]
+    fn a_window_capture_withheld_by_the_os_opens_the_guidance() {
+        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+        app.platform.capture = Box::new(WindowFails(
+            fake.clone(),
+            Error::PermissionDenied(Permission::ScreenRecording),
+        ));
+        pick(&mut app, WindowInput::Click(LogicalPoint::new(2.0, 2.0)));
+
+        assert!(overlays(&app).is_empty());
+        assert_eq!(windows(&app, WindowKind::Permission), 1);
+        assert_eq!(windows(&app, WindowKind::Alert), 0);
+        assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(fake.clipboard(), None);
+        assert!(saved(saves.path()).is_empty());
+    }
+
+    #[test]
+    fn a_window_that_cannot_be_captured_is_reported() {
+        // E.g. the window closed while the overlays were up.
+        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+        app.platform.capture = Box::new(WindowFails(
+            fake.clone(),
+            Error::Platform("no window with id 7".into()),
+        ));
+        pick(&mut app, WindowInput::Click(LogicalPoint::new(2.0, 2.0)));
+
+        assert!(overlays(&app).is_empty());
+        assert_eq!(windows(&app, WindowKind::Alert), 1);
+        assert_eq!(windows(&app, WindowKind::Permission), 0);
+        assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(fake.clipboard(), None);
+        assert!(saved(saves.path()).is_empty());
+    }
+
+    #[test]
+    fn a_window_list_that_fails_ends_the_window_capture() {
+        // The displays capture fine, but listing their windows is refused.
+        for (error, alerts, guidance) in [
+            (Error::Platform("SCShareableContent failed".into()), 1, 0),
+            (Error::PermissionDenied(Permission::ScreenRecording), 0, 1),
+        ] {
+            let (mut app, _default_desktop, saves) = app();
+            let fake = small_desktop();
+            app.platform = fake.platform();
+            app.platform.window_list = Box::new(ListFails(error.clone()));
+            let _ = start(&mut app, CaptureMode::Window);
+
+            assert!(overlays(&app).is_empty(), "{error}");
+            assert_eq!(windows(&app, WindowKind::Alert), alerts, "{error}");
+            assert_eq!(windows(&app, WindowKind::Permission), guidance, "{error}");
+            assert_eq!(app.capture.in_progress(), None, "{error}");
+            assert_eq!(fake.clipboard(), None, "{error}");
+            assert!(saved(saves.path()).is_empty(), "{error}");
+        }
     }
 
     #[test]
     fn a_rectangle_capture_opens_one_overlay_per_display() {
         let (mut app, fake, saves) = start_rectangle();
 
-        let covered: HashSet<DisplayId> = overlays(&app)
-            .into_iter()
-            .map(|window| app.overlay.display(window).expect("an overlay's display"))
-            .collect();
         assert_eq!(overlays(&app).len(), 2);
-        assert_eq!(covered, HashSet::from([DisplayId(1), DisplayId(2)]));
+        assert_eq!(covered(&app), HashSet::from([DisplayId(1), DisplayId(2)]));
         assert_eq!(app.capture.in_progress(), Some(CaptureMode::Rectangle));
         assert_eq!(
             fake.clipboard(),
@@ -621,13 +832,18 @@ mod tests {
 
     #[test]
     fn an_overlay_closed_from_outside_cancels_the_selection() {
-        let (mut app, fake, saves) = start_rectangle();
-        let closed = overlays(&app)[0];
-        let _ = app.settle(AppMessage::WindowClosed(closed));
+        for mode in [CaptureMode::Rectangle, CaptureMode::Window] {
+            let (mut app, fake, saves) = start_small(mode);
+            let closed = overlays(&app)[0];
+            let _ = app.settle(AppMessage::WindowClosed(closed));
 
-        assert!(overlays(&app).is_empty(), "the other overlays closed too");
-        assert_eq!(app.capture.in_progress(), None);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+            assert!(
+                overlays(&app).is_empty(),
+                "{mode}: the other overlays closed too"
+            );
+            assert_eq!(app.capture.in_progress(), None, "{mode}");
+            assert_eq!(fake.clipboard(), None, "{mode}");
+            assert!(saved(saves.path()).is_empty(), "{mode}");
+        }
     }
 }

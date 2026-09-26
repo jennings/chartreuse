@@ -329,7 +329,7 @@ Depends on: 2D (shares its overlay patterns). Owns: `chartreuse-overlay::window`
         items); report an empty clipboard and undecodable files to the user
   - [ ] Save and copy export actions, each with an optional close-after
   - [ ] Send I2 and I3 results to the editor
-- [ ] I5 — Window selection (M5). Depends on: I3, 2G, 2H, and the window-capture-source
+- [x] I5 — Window selection (M5). Depends on: I3, 2G, 2H, and the window-capture-source
       decision.
 
 ## Stage 3 — Settings and remaining editor tools (parallel)
