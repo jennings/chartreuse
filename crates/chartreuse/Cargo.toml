@@ -21,6 +21,14 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # Local time for saved file names.
 chrono = { workspace = true, features = ["clock"] }
+# Command-line parsing (`cli`); no color or suggestions.
+clap = { version = "4.6.6", default-features = false, features = [
+    "derive",
+    "error-context",
+    "help",
+    "std",
+    "usage",
+] }
 
 # The per-user folder of the single-instance socket (`ipc`).
 [target.'cfg(unix)'.dependencies]

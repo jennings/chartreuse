@@ -1,5 +1,5 @@
 //! The `chartreuse` executable. Everything lives in the library crate.
 
-fn main() -> iced::Result {
+fn main() -> std::process::ExitCode {
     chartreuse::run()
 }

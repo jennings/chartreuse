@@ -1,7 +1,9 @@
 //! Chartreuse: a screenshot and annotation tool that lives in the menu bar.
 //!
 //! The app is an [`iced::daemon`]: it runs with no windows and opens them on
-//! demand. See [`app`] for how state, messages, and windows are organized.
+//! demand. See [`app`] for how state, messages, and windows are organized,
+//! [`cli`] for the command line, and [`ipc`] for how one instance serves every
+//! command-line invocation.
 //!
 //! The app is a library plus a thin `main.rs`, so the cross-module contracts
 //! defined here ahead of their users are checked without dead-code noise.
@@ -9,6 +11,7 @@
 pub mod alert;
 pub mod app;
 pub mod capture;
+pub mod cli;
 pub mod editor;
 pub mod events;
 pub mod export;
@@ -22,7 +25,12 @@ pub mod theme;
 pub mod tray;
 pub mod windows;
 
+use std::cell::Cell;
+use std::ops::ControlFlow;
+use std::process::ExitCode;
+
 use chartreuse_core::flavor;
+use chartreuse_platform::EventReceiver;
 use tracing_subscriber::EnvFilter;
 
 /// The log filter when `RUST_LOG` is unset: our own logs at `info`, and only
@@ -30,8 +38,19 @@ use tracing_subscriber::EnvFilter;
 const DEFAULT_LOG_FILTER: &str =
     "info,wgpu_core=warn,wgpu_hal=warn,naga=warn,iced_wgpu=warn,iced_winit=warn";
 
-/// Initializes logging and runs the daemon until the app exits.
-pub fn run() -> iced::Result {
+/// Runs the command line ([`cli`]): hands its command to the running
+/// instance, or becomes the instance and runs the daemon until the app exits.
+/// Returns the process's exit status.
+#[must_use]
+pub fn run() -> ExitCode {
+    let command = match cli::Cli::from_env().command() {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -40,6 +59,62 @@ pub fn run() -> iced::Result {
         .with_writer(std::io::stderr)
         .init();
 
+    match single_instance(command.as_ref()) {
+        ControlFlow::Continue(requests) => run_app(ipc::State::new(requests, command)),
+        ControlFlow::Break(status) => status,
+    }
+}
+
+/// Becomes the instance and serves its channel (`Continue`, with the requests;
+/// `None` if there is no channel), or hands `command` to the running instance
+/// (`Break`, with the exit status). Without a working channel the app still
+/// starts, as a second instance if need be.
+fn single_instance(
+    command: Option<&ipc::Command>,
+) -> ControlFlow<ExitCode, Option<EventReceiver<ipc::Request>>> {
+    let endpoint = match ipc::Endpoint::current() {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            tracing::warn!(%error, "no channel to a running instance; starting anyway");
+            return ControlFlow::Continue(None);
+        }
+    };
+    match ipc::connect_or_claim(&endpoint) {
+        Ok(ipc::Role::Client(stream)) => ControlFlow::Break(forward(stream, command)),
+        Ok(ipc::Role::Instance(listener)) => match ipc::serve(listener) {
+            Ok(requests) => {
+                tracing::info!(%endpoint, "listening for commands");
+                ControlFlow::Continue(Some(requests))
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot listen for commands; starting anyway");
+                ControlFlow::Continue(None)
+            }
+        },
+        Err(error) => {
+            tracing::warn!(%error, %endpoint, "cannot reach a running instance; starting anyway");
+            ControlFlow::Continue(None)
+        }
+    }
+}
+
+/// Hands `command` to the running instance over `stream`; the exit status.
+fn forward(stream: ipc::Stream, command: Option<&ipc::Command>) -> ExitCode {
+    let Some(command) = command else {
+        eprintln!("{} is already running", flavor::DISPLAY_NAME);
+        return ExitCode::SUCCESS;
+    };
+    match ipc::send(stream, command) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs the daemon until the app exits.
+fn run_app(ipc: ipc::State) -> ExitCode {
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         bundle_id = flavor::BUNDLE_ID,
@@ -47,13 +122,22 @@ pub fn run() -> iced::Result {
         flavor::DISPLAY_NAME
     );
 
-    iced::daemon(
-        || app::App::boot(ipc::State::default()),
+    // iced boots once; the cell hands the state over by value.
+    let ipc = Cell::new(Some(ipc));
+    let result = iced::daemon(
+        move || app::App::boot(ipc.take().unwrap_or_default()),
         app::App::update,
         app::App::view,
     )
     .title(app::App::title)
     .theme(app::App::theme)
     .subscription(app::App::subscription)
-    .run()
+    .run();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(%error, "{} failed", flavor::DISPLAY_NAME);
+            ExitCode::FAILURE
+        }
+    }
 }
