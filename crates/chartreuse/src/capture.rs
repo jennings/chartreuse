@@ -27,8 +27,12 @@
 //!      from the snapshot: whole even where other windows covered it, with its
 //!      shadow and rounded corners. Cancelling ends the capture as for a
 //!      rectangle.
-//! 4. The image ([`Message::Finished`]) opens in a new editor window
-//!    (`editor::Message::Open`).
+//! 4. The image ([`Message::Finished`]) is handed on as the settings'
+//!    post-capture behavior ([`App::config`], [`AfterCapture`]) says: it opens
+//!    in a new editor window (`editor::Message::Open`, the default), is copied
+//!    to the clipboard, or is saved into the save directory and copied
+//!    (`export::Target::SaveToDirectory` and `export::Target::Copy`, which
+//!    report their own failures).
 //!
 //! One capture runs at a time, selection included: a `Start` while one is in
 //! progress is ignored.
@@ -43,6 +47,7 @@
 
 use std::sync::Arc;
 
+use chartreuse_config::AfterCapture;
 use chartreuse_core::capture::CaptureMode;
 use chartreuse_core::display::{DisplayLayout, PixelGrid};
 use chartreuse_core::geometry::LogicalRect;
@@ -58,6 +63,7 @@ use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
+use crate::export::{self, Request, Target};
 use crate::{editor, overlay, permission};
 
 /// This feature's part of the app state ([`App::capture`]).
@@ -200,15 +206,38 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
                 mode = ?mode,
                 width = image.size().width,
                 height = image.size().height,
+                after = ?app.config.after_capture,
                 "captured"
             );
-            Task::done(AppMessage::Editor(editor::Message::Open(image)))
+            hand_on(app.config.after_capture, image)
         }
     }
 }
 
 pub fn subscription(_app: &App) -> Subscription<AppMessage> {
     Subscription::none()
+}
+
+/// Hands a finished capture on as `after` says.
+fn hand_on(after: AfterCapture, image: Arc<Image>) -> Task<AppMessage> {
+    let export = |target, image| {
+        Task::done(AppMessage::Export(export::Message::Export(
+            target,
+            Request {
+                image,
+                taken: chrono::Local::now().naive_local(),
+                then_close: None,
+            },
+        )))
+    };
+    match after {
+        AfterCapture::OpenEditor => Task::done(AppMessage::Editor(editor::Message::Open(image))),
+        AfterCapture::Copy => export(Target::Copy, image),
+        AfterCapture::SaveAndCopy => Task::batch([
+            export(Target::Copy, Arc::clone(&image)),
+            export(Target::SaveToDirectory, image),
+        ]),
+    }
 }
 
 fn start(app: &mut App, mode: CaptureMode) -> Task<AppMessage> {
@@ -318,7 +347,9 @@ fn failed(app: &mut App, error: &Error) -> Task<AppMessage> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fs;
 
+    use chartreuse_config::SaveDirectory;
     use chartreuse_core::display::{DisplayId, DisplayInfo};
     use chartreuse_core::geometry::{LogicalPoint, LogicalRect, PhysicalSize, ScaleFactor};
     use chartreuse_core::permission::PermissionStatus;
@@ -472,6 +503,59 @@ mod tests {
 
         assert_eq!(fake.clipboard(), None, "nothing is copied until asked");
         assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(windows(&app, WindowKind::Alert), 0);
+    }
+
+    /// An app on [`small_desktop`] whose captures are handed on as `after`
+    /// says.
+    fn small_app(after: AfterCapture) -> (App, Fake) {
+        let (mut app, _default_desktop) = App::for_test();
+        let fake = small_desktop();
+        app.platform = fake.platform();
+        app.config.after_capture = after;
+        (app, fake)
+    }
+
+    #[test]
+    fn copy_after_capture_copies_the_capture_without_an_editor() {
+        let (mut app, fake) = small_app(AfterCapture::Copy);
+        let _ = start(&mut app, CaptureMode::Display);
+
+        let copied = fake.clipboard().expect("the capture was copied");
+        assert_eq!(
+            copied.size(),
+            PhysicalSize::new(24, 16),
+            "the whole desktop"
+        );
+        assert!(editor_images(&app).is_empty());
+        assert_eq!(app.capture.in_progress(), None);
+        assert_eq!(windows(&app, WindowKind::Alert), 0);
+    }
+
+    #[test]
+    fn save_and_copy_after_capture_saves_into_the_save_directory_and_copies() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("Captures");
+        let (mut app, fake) = small_app(AfterCapture::SaveAndCopy);
+        app.config.save_directory = Some(SaveDirectory::new(&directory).unwrap());
+        app.config.file_name = "Capture".parse().unwrap();
+
+        let _ = start(&mut app, CaptureMode::Display);
+        let copied = fake.clipboard().expect("the capture was copied");
+        assert_eq!(copied.size(), PhysicalSize::new(24, 16));
+        let saved = chartreuse_imaging::decode_file(&directory.join("Capture.png")).unwrap();
+        assert_eq!(saved, copied);
+
+        // The next capture does not replace the first.
+        let _ = start(&mut app, CaptureMode::Display);
+        let mut names: Vec<_> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["Capture (2).png", "Capture.png"]);
+        assert!(editor_images(&app).is_empty());
+        assert!(fake.save_requests().is_empty(), "no save dialog");
         assert_eq!(windows(&app, WindowKind::Alert), 0);
     }
 
