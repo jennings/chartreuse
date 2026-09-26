@@ -1,9 +1,11 @@
-//! Windows: privacy permissions. Implemented by track 4A.
+//! Windows: privacy permissions.
 //!
-//! Until then every call fails with [`Error::Unsupported`].
+//! Windows asks desktop applications for no permission to capture the screen or
+//! other windows (Windows.Graphics.Capture, `BitBlt`, and `PrintWindow` all just
+//! work), so every permission is granted and there is no settings page to open.
 
 use chartreuse_core::permission::{Permission, PermissionStatus};
-use chartreuse_core::{Error, Result};
+use chartreuse_core::Result;
 
 use crate::permissions::Permissions;
 
@@ -19,14 +21,17 @@ impl WindowsPermissions {
 
 impl Permissions for WindowsPermissions {
     fn status(&self, _permission: Permission) -> Result<PermissionStatus> {
-        Err(Error::Unsupported("permission checking"))
+        Ok(PermissionStatus::Granted)
     }
 
     fn request(&self, _permission: Permission) -> Result<PermissionStatus> {
-        Err(Error::Unsupported("permission checking"))
+        Ok(PermissionStatus::Granted)
     }
 
-    fn open_settings(&self, _permission: Permission) -> Result<()> {
-        Err(Error::Unsupported("permission checking"))
+    fn open_settings(&self, permission: Permission) -> Result<()> {
+        // Unreachable in practice: the app only offers this for a denied
+        // permission, and nothing is ever denied here.
+        tracing::debug!(%permission, "Windows has no settings for this permission");
+        Ok(())
     }
 }
