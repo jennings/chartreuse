@@ -500,12 +500,7 @@ mod tests {
         let _ = app.settle(chosen);
         assert_eq!(edited(&app).size(), desktop);
 
-        let hotkey = hotkeys::default_bindings()
-            .into_iter()
-            .find(|binding| binding.mode == CaptureMode::Display)
-            .unwrap()
-            .hotkey;
-        assert!(fake.press_hotkey(hotkey));
+        assert!(fake.press_hotkey(app.config.hotkeys.get(CaptureMode::Display)));
         let pressed = next_message(hotkeys::subscription(&app));
         let _ = app.settle(pressed);
         let sizes: Vec<_> = editor_images(&app).iter().map(Image::size).collect();

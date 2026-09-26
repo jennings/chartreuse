@@ -6,18 +6,12 @@
 //! # Startup
 //!
 //! `boot` schedules [`Message::Register`] (Carbon needs the running event loop),
-//! which registers [`default_bindings`], one hotkey per capture mode:
-//!
-//! | Hotkey             | Mode              |
-//! |--------------------|-------------------|
-//! | Ctrl+Alt+Shift+3   | Capture display   |
-//! | Ctrl+Alt+Shift+4   | Capture rectangle |
-//! | Ctrl+Alt+Shift+5   | Capture window    |
-//!
-//! They echo the system screenshot shortcuts (Shift+Command+3/4/5) without
-//! clashing with them, since macOS keeps those for itself. Settings (3A) will make
-//! them configurable. Pressing one starts that capture
-//! (`capture::Message::Start`).
+//! which registers the hotkeys from the settings ([`App::config`]), one per
+//! capture mode ([`bindings`]). By default they are Ctrl+Alt+Shift+3 (display),
+//! +4 (rectangle) and +5 (window), echoing the system screenshot shortcuts
+//! (Shift+Command+3/4/5) without clashing with them, since macOS keeps those
+//! for itself (see [`chartreuse_config::Hotkeys`]). Pressing one starts that
+//! capture (`capture::Message::Start`).
 //!
 //! # Failures
 //!
@@ -26,8 +20,7 @@
 //! the other bindings stay active. If hotkeys are unavailable altogether, that is
 //! reported instead.
 
-use chartreuse_core::capture::CaptureMode;
-use chartreuse_core::hotkey::{Hotkey, Key, Modifiers};
+use chartreuse_config::Hotkeys;
 use chartreuse_core::Error;
 use chartreuse_platform::{HotkeyBinding, HotkeyEvent, HotkeyRegistration};
 use iced::{Subscription, Task};
@@ -46,31 +39,21 @@ pub struct State {
 /// This feature's messages ([`AppMessage::Hotkeys`]).
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// Register the startup set ([`default_bindings`]). Sent by `boot`.
+    /// Register the hotkeys from the settings ([`bindings`] of
+    /// [`App::config`]). Sent by `boot`.
     Register,
     /// A registered hotkey was pressed.
     Pressed(HotkeyEvent),
 }
 
-/// The startup hotkey set: Ctrl+Alt+Shift+3, 4, and 5 capture a display, a
-/// rectangle, and a window.
+/// What to register for `hotkeys`: one binding per capture mode.
 #[must_use]
-pub fn default_bindings() -> Vec<HotkeyBinding> {
-    let hotkey = |key| Hotkey::new(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT, key);
-    vec![
-        HotkeyBinding {
-            mode: CaptureMode::Display,
-            hotkey: hotkey(Key::Digit3),
-        },
-        HotkeyBinding {
-            mode: CaptureMode::Rectangle,
-            hotkey: hotkey(Key::Digit4),
-        },
-        HotkeyBinding {
-            mode: CaptureMode::Window,
-            hotkey: hotkey(Key::Digit5),
-        },
-    ]
+pub fn bindings(hotkeys: &Hotkeys) -> Vec<HotkeyBinding> {
+    hotkeys
+        .bindings()
+        .into_iter()
+        .map(|(mode, hotkey)| HotkeyBinding { mode, hotkey })
+        .collect()
 }
 
 /// Replaces the registered hotkeys with `bindings` and returns the task to
@@ -123,7 +106,7 @@ pub fn boot(_app: &mut App) -> Task<AppMessage> {
 
 pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
     match message {
-        Message::Register => reregister(app, default_bindings()),
+        Message::Register => reregister(app, bindings(&app.config.hotkeys)),
         Message::Pressed(event) => {
             tracing::info!(hotkey = %event.hotkey, "hotkey pressed: {}", event.mode);
             Task::done(AppMessage::Capture(capture::Message::Start(event.mode)))
@@ -141,7 +124,9 @@ pub fn subscription(app: &App) -> Subscription<AppMessage> {
 
 #[cfg(test)]
 mod tests {
-    use chartreuse_platform::Hotkeys;
+    use chartreuse_core::capture::CaptureMode;
+    use chartreuse_core::hotkey::{Hotkey, Key, Modifiers};
+    use chartreuse_platform::Hotkeys as _;
     use futures::executor::block_on;
     use futures::StreamExt;
     use iced::advanced::subscription::into_recipes;
@@ -160,34 +145,39 @@ mod tests {
         }
     }
 
+    /// The bindings of the default settings.
+    fn defaults() -> Vec<HotkeyBinding> {
+        bindings(&Hotkeys::default())
+    }
+
     #[test]
-    fn boot_leaves_registration_to_update() {
+    fn boot_leaves_registering_the_configured_hotkeys_to_update() {
         let (mut app, fake) = App::for_test();
+        let [display, window, rectangle] =
+            [Key::F1, Key::F2, Key::F3].map(|key| Hotkey::new(Modifiers::SUPER, key));
+        app.config.hotkeys = Hotkeys::new(display, window, rectangle).unwrap();
         let _ = boot(&mut app);
         assert!(fake.registered_hotkeys().is_empty());
 
         let _ = app.update(AppMessage::Hotkeys(Message::Register));
-        assert_eq!(fake.registered_hotkeys(), default_bindings());
+        assert_eq!(
+            fake.registered_hotkeys(),
+            [
+                HotkeyBinding {
+                    mode: CaptureMode::Display,
+                    hotkey: display
+                },
+                HotkeyBinding {
+                    mode: CaptureMode::Window,
+                    hotkey: window
+                },
+                HotkeyBinding {
+                    mode: CaptureMode::Rectangle,
+                    hotkey: rectangle
+                },
+            ]
+        );
         assert_eq!(alerts(&app), 0);
-    }
-
-    #[test]
-    fn the_defaults_bind_every_mode_to_its_own_hotkey() {
-        let bindings = default_bindings();
-        let modes: Vec<CaptureMode> = bindings.iter().map(|binding| binding.mode).collect();
-        assert_eq!(modes.len(), CaptureMode::ALL.len());
-        for mode in CaptureMode::ALL {
-            assert!(modes.contains(&mode), "{mode} has no hotkey");
-        }
-        for (index, binding) in bindings.iter().enumerate() {
-            assert!(
-                bindings[..index]
-                    .iter()
-                    .all(|other| other.hotkey != binding.hotkey),
-                "{} is bound twice",
-                binding.hotkey
-            );
-        }
     }
 
     #[test]
@@ -201,7 +191,7 @@ mod tests {
             .unwrap()
             .stream(futures::stream::empty().boxed());
 
-        for binding in default_bindings() {
+        for binding in defaults() {
             assert!(fake.press_hotkey(binding.hotkey));
             let message = block_on(presses.next());
             let Some(AppMessage::Hotkeys(Message::Pressed(event))) = message else {
@@ -274,14 +264,14 @@ mod tests {
         let old_events = app.hotkeys.registration.as_ref().unwrap().events.clone();
 
         // The same set again: the old registration is gone first, so no clash.
-        let _ = reregister(&mut app, default_bindings());
-        assert_eq!(fake.registered_hotkeys(), default_bindings());
+        let _ = reregister(&mut app, defaults());
+        assert_eq!(fake.registered_hotkeys(), defaults());
         assert_eq!(alerts(&app), 0);
 
         let window = binding(CaptureMode::Window, Key::W);
         let _ = reregister(&mut app, vec![window]);
         assert_eq!(fake.registered_hotkeys(), [window]);
-        assert!(!fake.press_hotkey(default_bindings()[0].hotkey));
+        assert!(!fake.press_hotkey(defaults()[0].hotkey));
         assert!(fake.press_hotkey(window.hotkey));
         let registration = app.hotkeys.registration.as_ref().unwrap();
         assert_ne!(registration.events, old_events, "a new subscription");
@@ -294,7 +284,7 @@ mod tests {
     #[derive(Debug)]
     struct Unavailable;
 
-    impl Hotkeys for Unavailable {
+    impl chartreuse_platform::Hotkeys for Unavailable {
         fn register(
             &self,
             _bindings: &[HotkeyBinding],
@@ -309,7 +299,7 @@ mod tests {
         let _ = update(&mut app, Message::Register);
         app.platform.hotkeys = Box::new(Unavailable);
 
-        let _ = reregister(&mut app, default_bindings());
+        let _ = reregister(&mut app, defaults());
         assert_eq!(alerts(&app), 1);
         assert!(app.hotkeys.registration.is_none());
         assert!(fake.registered_hotkeys().is_empty());
