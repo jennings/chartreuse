@@ -125,6 +125,7 @@ Everything beyond `cargo build` is a `cargo xtask` command, and CI runs nothing 
 | `cargo xtask run` | `bundle`, then launch it through LaunchServices. `--fake` uses the synthetic platform backend |
 | `cargo xtask dev-cert` | Once per machine (macOS): create the self-signed development signing identity that `bundle` uses when `CHARTREUSE_SIGN_IDENTITY` is unset |
 | `cargo xtask release` | Release build for the host platform, archived into `target/dist/` (emptied first) as `Chartreuse-<version>-<os>-<arch>`. macOS: `Chartreuse.app` signed with `CHARTREUSE_RELEASE_SIGN_IDENTITY` (a Developer ID Application identity), zipped; `--allow-ad-hoc` signs ad-hoc instead when the variable is unset, and the archive name ends in `-unsigned`. Windows (`.zip`) and Linux (`.tar.gz`): the executable with `LICENSE` and `README.md`. |
+| `cargo xtask upload-release <tag>` | Attach every file in `target/dist/` to the GitHub release `<tag>` with the [GitHub CLI](https://cli.github.com) (`gh`), replacing assets of the same name. The tag must be `v<version>` for the `Cargo.toml` version, and every file must be named for that version. Needs `GH_TOKEN` (or `gh auth login`), and `GH_REPO=owner/repo` outside a git checkout. |
 
 The build flavor (development or release: bundle identifier, name, accent color) is
 chosen by the `release-flavor` cargo feature, which only `cargo xtask release`

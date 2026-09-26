@@ -11,6 +11,7 @@ mod info_plist;
 mod launch;
 mod release;
 mod sign;
+mod upload_release;
 mod util;
 
 use std::process::ExitCode;
@@ -36,6 +37,11 @@ Commands:
             (.tar.gz) the executable with LICENSE and README.md
             --allow-ad-hoc  macOS: sign ad-hoc when the identity is unset; the
                             archive name ends in -unsigned
+  upload-release <tag>
+            attach every file in target/dist to the GitHub release <tag>
+            (v<version>, matching Cargo.toml) with the GitHub CLI, replacing
+            assets of the same name; needs GH_TOKEN and, outside a git
+            checkout, GH_REPO=owner/repo
 ";
 
 fn main() -> ExitCode {
@@ -53,6 +59,7 @@ fn main() -> ExitCode {
         ["dev-cert"] => dev_cert::dev_cert(),
         ["release"] => release::release(false),
         ["release", "--allow-ad-hoc"] => release::release(true),
+        ["upload-release", tag] => upload_release::upload_release(tag),
         [] | ["help" | "--help" | "-h"] => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
