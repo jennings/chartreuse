@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- The Windows application manifest, embedded into chartreuse.exe by build.rs.
+     Per-Monitor DPI Awareness v2 makes Windows report every coordinate in physical
+     pixels and lets each window follow its monitor's DPI, which the platform
+     backend's display layout relies on. Windows before 10 1703 ignores
+     dpiAwareness and falls back to dpiAware (per-monitor v1). -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>
