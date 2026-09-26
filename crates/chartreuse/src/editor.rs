@@ -9,7 +9,9 @@
 //! opened and sized by [`window_size`]: big enough for the image at one screen
 //! point per pixel, within 80% of the primary display. The app is a menu bar
 //! app with no Dock icon, so the window is focused explicitly to bring it
-//! forward.
+//! forward. Once it is open, the editor is told the window's scale factor
+//! (which not every platform reports by itself), so it draws highlighters at
+//! the display's resolution.
 //!
 //! # Exporting
 //!
@@ -203,7 +205,8 @@ pub fn window_closed(app: &mut App, window: window::Id) -> Task<AppMessage> {
     Task::none()
 }
 
-/// Opens a new editor window over `image` and focuses it.
+/// Opens a new editor window over `image`, focuses it, and tells the editor
+/// its scale factor.
 fn open(app: &mut App, image: Image) -> Task<AppMessage> {
     let opened = chrono::Local::now().naive_local();
     let size = window_size(image.size(), primary_display(app));
@@ -235,8 +238,18 @@ fn open(app: &mut App, image: Image) -> Task<AppMessage> {
             title,
         },
     );
+    // Not every platform reports a new window's scale factor (the editor
+    // hears of later changes itself), so ask for it.
+    let scale_factor = window::scale_factor(id).map(move |scale_factor| {
+        AppMessage::Editor(Message::Widget(
+            id,
+            chartreuse_editor::Message::ScaleFactor(scale_factor),
+        ))
+    });
     // The app has no Dock icon, so bring the window forward explicitly.
-    open.discard().chain(window::gain_focus(id))
+    open.discard()
+        .chain(window::gain_focus(id))
+        .chain(scale_factor)
 }
 
 /// The primary display's size in points, if the displays can be listed.
