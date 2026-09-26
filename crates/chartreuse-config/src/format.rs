@@ -3,15 +3,18 @@
 use std::fmt;
 
 use chartreuse_imaging::Format;
+use serde::{Deserialize, Serialize};
 
 /// A format Chartreuse can save captures in: the encodable subset of
 /// [`chartreuse_imaging::Format`].
 ///
 /// In the settings file it is `"png"`, `"jpeg"` (or `"jpg"`) or `"webp"`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SaveFormat {
     #[default]
     Png,
+    #[serde(alias = "jpg")]
     Jpeg,
     WebP,
 }

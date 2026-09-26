@@ -32,6 +32,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::{Datelike as _, NaiveDateTime, Timelike as _};
+use serde::{Deserialize, Serialize};
 
 use crate::format::SaveFormat;
 
@@ -160,8 +161,10 @@ impl From<PatternError> for chartreuse_core::Error {
 
 /// A validated file name pattern (see the [module docs](self)).
 ///
-/// `Display` and [`FromStr`] use the pattern text, exactly as written.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Display` and [`FromStr`] use the pattern text, exactly as written, and so
+/// does the settings file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct FileNamePattern {
     text: String,
     segments: Vec<Segment>,
