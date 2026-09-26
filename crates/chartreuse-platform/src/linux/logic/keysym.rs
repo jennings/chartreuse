@@ -1,10 +1,10 @@
-//! X keysyms for [`Key`]s: the numeric values X11 key grabs look up, and
-//! their xkb names.
+//! X keysyms for [`Key`]s: the numeric values X11 key grabs look up, and the
+//! xkb names the GlobalShortcuts portal's trigger strings use.
 //!
 //! Chartreuse keys name positions on a US layout; each maps to the keysym that
 //! position produces unshifted there (`Key::Minus` is `minus`, `Key::A` is `a`).
 
-use chartreuse_core::hotkey::Key;
+use chartreuse_core::hotkey::{Hotkey, Key, Modifiers};
 
 /// The keysym value and xkb name `key` produces.
 #[must_use]
@@ -96,6 +96,27 @@ pub const fn keysym(key: Key) -> (u32, &'static str) {
     }
 }
 
+/// `hotkey` as a trigger in the XDG "shortcuts" format the GlobalShortcuts
+/// portal takes as a preferred trigger: `CTRL`, `ALT`, `SHIFT`, and `LOGO`
+/// joined by `+`, then the key's xkb keysym name (`CTRL+SHIFT+Print`).
+#[must_use]
+pub fn xdg_trigger(hotkey: Hotkey) -> String {
+    let mut trigger = String::new();
+    for (modifier, name) in [
+        (Modifiers::CONTROL, "CTRL"),
+        (Modifiers::ALT, "ALT"),
+        (Modifiers::SHIFT, "SHIFT"),
+        (Modifiers::SUPER, "LOGO"),
+    ] {
+        if hotkey.modifiers.contains(modifier) {
+            trigger.push_str(name);
+            trigger.push('+');
+        }
+    }
+    trigger.push_str(keysym(hotkey.key).1);
+    trigger
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -133,5 +154,17 @@ mod tests {
         for n in 1..20 {
             assert_eq!(f(n + 1), f(n) + 1, "F{}", n + 1);
         }
+    }
+
+    #[test]
+    fn xdg_triggers_list_modifiers_in_order_before_the_keysym_name() {
+        let hotkey = |text: &str| text.parse::<Hotkey>().unwrap();
+        assert_eq!(
+            xdg_trigger(hotkey("Super+Shift+Alt+Ctrl+4")),
+            "CTRL+ALT+SHIFT+LOGO+4"
+        );
+        assert_eq!(xdg_trigger(hotkey("Shift+PrintScreen")), "SHIFT+Print");
+        assert_eq!(xdg_trigger(hotkey("PageUp")), "Prior");
+        assert_eq!(xdg_trigger(hotkey("Ctrl+A")), "CTRL+a");
     }
 }
