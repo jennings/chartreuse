@@ -14,21 +14,21 @@
 //! 3. By mode:
 //!    - **Display**: the snapshot is composited onto the whole desktop
 //!      ([`Snapshot::desktop`], at the largest scale factor, off the main
-//!      thread) and the image goes to `export::Message::CopyAndSave`.
+//!      thread).
 //!    - **Rectangle**: the snapshot is kept while the selection overlays show
 //!      it (`overlay::Message::OpenRectangle`). A committed rectangle
 //!      ([`Message::Selected`]) is cropped at the largest scale factor of the
 //!      displays it covers ([`rectangle::output_grid`], then
-//!      [`Snapshot::composite`] off the main thread) and goes to
-//!      `export::Message::CopyAndSave` too. A cancelled selection
+//!      [`Snapshot::composite`] off the main thread). A cancelled selection
 //!      ([`Message::SelectionCancelled`]) discards the snapshot.
 //!    - **Window**: the selection overlays show the snapshot and highlight the
 //!      window under the pointer (`overlay::Message::OpenWindow`). A committed
 //!      window ([`Message::WindowSelected`]) is captured directly, not cropped
 //!      from the snapshot: whole even where other windows covered it, with its
-//!      shadow and rounded corners. Its image goes to
-//!      `export::Message::CopyAndSave`. Cancelling ends the capture as for a
+//!      shadow and rounded corners. Cancelling ends the capture as for a
 //!      rectangle.
+//! 4. The image ([`Message::Finished`]) opens in a new editor window
+//!    (`editor::Message::Open`).
 //!
 //! One capture runs at a time, selection included: a `Start` while one is in
 //! progress is ignored.
@@ -58,7 +58,7 @@ use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
-use crate::{export, overlay, permission};
+use crate::{editor, overlay, permission};
 
 /// This feature's part of the app state ([`App::capture`]).
 #[derive(Debug, Default)]
@@ -202,7 +202,7 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
                 height = image.size().height,
                 "captured"
             );
-            Task::done(AppMessage::Export(export::Message::CopyAndSave(image)))
+            Task::done(AppMessage::Editor(editor::Message::Open(image)))
         }
     }
 }
@@ -318,8 +318,6 @@ fn failed(app: &mut App, error: &Error) -> Task<AppMessage> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::fs;
-    use std::path::{Path, PathBuf};
 
     use chartreuse_core::display::{DisplayId, DisplayInfo};
     use chartreuse_core::geometry::{LogicalPoint, LogicalRect, PhysicalSize, ScaleFactor};
@@ -337,15 +335,6 @@ mod tests {
     use super::*;
     use crate::windows::WindowKind;
     use crate::{hotkeys, tray};
-
-    /// A test app whose saves go to a fresh temporary directory.
-    fn app() -> (App, Fake, tempfile::TempDir) {
-        let (mut app, fake) = App::for_test();
-        let saves = tempfile::tempdir().unwrap();
-        app.config.save_directory =
-            Some(chartreuse_config::SaveDirectory::new(saves.path()).unwrap());
-        (app, fake, saves)
-    }
 
     /// A small desktop, to keep compositing fast: a 2× primary display with its
     /// top-left at the global origin, and a 1× display up and to the left of it.
@@ -402,22 +391,19 @@ mod tests {
         app.windows.of_kind(kind).count()
     }
 
-    fn saved(directory: &Path) -> Vec<PathBuf> {
-        fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
+    /// The images of the open editor windows, in no particular order.
+    fn editor_images(app: &App) -> Vec<Image> {
+        app.windows
+            .of_kind(WindowKind::Editor)
+            .map(|window| app.editor.get(window).unwrap().document().base().clone())
             .collect()
     }
 
-    /// The width and height in a PNG file's header.
-    fn png_size(path: &Path) -> PhysicalSize {
-        let bytes = fs::read(path).unwrap();
-        assert_eq!(
-            chartreuse_imaging::Format::detect(&bytes),
-            Some(chartreuse_imaging::Format::Png)
-        );
-        let field = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
-        PhysicalSize::new(field(16), field(20))
+    /// The image of the one open editor window.
+    fn edited(app: &App) -> Image {
+        let mut images = editor_images(app);
+        assert_eq!(images.len(), 1, "one editor window");
+        images.pop().unwrap()
     }
 
     /// A capture backend that always answers `result`.
@@ -457,15 +443,15 @@ mod tests {
     }
 
     #[test]
-    fn a_display_capture_composites_the_desktop_then_copies_and_saves_it() {
-        let (mut app, _default_desktop, saves) = app();
+    fn a_display_capture_composites_the_desktop_and_opens_it_in_an_editor() {
+        let (mut app, _default_desktop) = App::for_test();
         let fake = small_desktop();
         app.platform = fake.platform();
         let _ = start(&mut app, CaptureMode::Display);
 
         // The desktop spans 12 × 8 logical points, composited at the largest
         // scale factor, 2×.
-        let desktop = fake.clipboard().expect("the capture was copied");
+        let desktop = edited(&app);
         assert_eq!(desktop.size(), PhysicalSize::new(24, 16));
 
         // The 2× primary display lands unscaled with its top-left, the global
@@ -484,9 +470,7 @@ mod tests {
         let gap = desktop.pixel((4 - 1) * 2, (2 + 4) * 2).unwrap();
         assert_eq!(gap.a, 0, "gaps between displays are transparent");
 
-        let files = saved(saves.path());
-        assert_eq!(files.len(), 1, "{files:?}");
-        assert_eq!(png_size(&files[0]), desktop.size());
+        assert_eq!(fake.clipboard(), None, "nothing is copied until asked");
         assert_eq!(app.capture.in_progress(), None);
         assert_eq!(windows(&app, WindowKind::Alert), 0);
     }
@@ -503,8 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_and_the_display_hotkey_capture_the_desktop() {
-        let (mut app, _default_desktop, saves) = app();
+    fn the_menu_and_the_display_hotkey_each_open_the_desktop_in_an_editor() {
+        let (mut app, _default_desktop) = App::for_test();
         let fake = small_desktop();
         app.platform = fake.platform();
         let _ = app.settle(AppMessage::Tray(tray::Message::Install));
@@ -514,10 +498,8 @@ mod tests {
         assert!(fake.choose_menu_action(MenuAction::Capture(CaptureMode::Display)));
         let chosen = next_message(tray::subscription(&app));
         let _ = app.settle(chosen);
-        assert_eq!(fake.clipboard().map(|image| image.size()), Some(desktop));
-        assert_eq!(saved(saves.path()).len(), 1);
+        assert_eq!(edited(&app).size(), desktop);
 
-        fake.set_clipboard(None);
         let hotkey = hotkeys::default_bindings()
             .into_iter()
             .find(|binding| binding.mode == CaptureMode::Display)
@@ -526,14 +508,18 @@ mod tests {
         assert!(fake.press_hotkey(hotkey));
         let pressed = next_message(hotkeys::subscription(&app));
         let _ = app.settle(pressed);
-        assert_eq!(fake.clipboard().map(|image| image.size()), Some(desktop));
-        assert_eq!(saved(saves.path()).len(), 2);
+        let sizes: Vec<_> = editor_images(&app).iter().map(Image::size).collect();
+        assert_eq!(
+            sizes,
+            [desktop, desktop],
+            "each capture opens its own editor"
+        );
         assert_eq!(windows(&app, WindowKind::Alert), 0);
     }
 
     #[test]
     fn a_denied_permission_opens_the_guidance_and_captures_nothing() {
-        let (mut app, fake, saves) = app();
+        let (mut app, fake) = App::for_test();
         fake.set_screen_recording(PermissionStatus::Denied);
 
         for mode in CaptureMode::ALL {
@@ -548,15 +534,14 @@ mod tests {
             assert_eq!(windows(&app, WindowKind::Overlay), 0, "{mode}");
             assert_eq!(app.capture.in_progress(), None, "{mode}");
         }
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
     }
 
     #[test]
     fn a_capture_withheld_by_the_os_opens_the_guidance() {
         // The status says granted, but the capture itself is refused (or came
         // back blank, which the platform reports the same way).
-        let (mut app, fake, saves) = app();
+        let (mut app, _fake) = App::for_test();
         app.platform.capture = Box::new(Scripted(Err(Error::PermissionDenied(
             Permission::ScreenRecording,
         ))));
@@ -564,13 +549,12 @@ mod tests {
         let _ = start(&mut app, CaptureMode::Display);
         assert_eq!(windows(&app, WindowKind::Permission), 1);
         assert_eq!(windows(&app, WindowKind::Alert), 0);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
     }
 
     #[test]
     fn capture_errors_are_reported_and_the_next_capture_can_start() {
-        let (mut app, fake, saves) = app();
+        let (mut app, _fake) = App::for_test();
         app.platform.capture = Box::new(Scripted(Err(Error::Platform(
             "SCShareableContent failed".into(),
         ))));
@@ -581,14 +565,13 @@ mod tests {
 
         assert_eq!(windows(&app, WindowKind::Alert), 2);
         assert_eq!(windows(&app, WindowKind::Permission), 0);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
         assert_eq!(app.capture.in_progress(), None);
     }
 
     #[test]
     fn a_start_during_a_capture_is_ignored() {
-        let (mut app, _fake, _saves) = app();
+        let (mut app, _fake) = App::for_test();
         let first = app.update(AppMessage::Capture(Message::Start(CaptureMode::Display)));
         assert!(iced_runtime::task::into_stream(first).is_some());
         assert_eq!(app.capture.in_progress(), Some(CaptureMode::Display));
@@ -610,16 +593,16 @@ mod tests {
     }
 
     /// Starts a capture of the small desktop.
-    fn start_small(mode: CaptureMode) -> (App, Fake, tempfile::TempDir) {
-        let (mut app, _default_desktop, saves) = app();
+    fn start_small(mode: CaptureMode) -> (App, Fake) {
+        let (mut app, _default_desktop) = App::for_test();
         let fake = small_desktop();
         app.platform = fake.platform();
         let _ = start(&mut app, mode);
-        (app, fake, saves)
+        (app, fake)
     }
 
     /// Starts a rectangle capture of the small desktop.
-    fn start_rectangle() -> (App, Fake, tempfile::TempDir) {
+    fn start_rectangle() -> (App, Fake) {
         start_small(CaptureMode::Rectangle)
     }
 
@@ -633,51 +616,49 @@ mod tests {
 
     #[test]
     fn a_window_capture_opens_one_overlay_per_display() {
-        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+        let (mut app, _fake) = start_small(CaptureMode::Window);
 
         assert_eq!(overlays(&app).len(), 2);
         assert_eq!(covered(&app), HashSet::from([DisplayId(1), DisplayId(2)]));
         assert_eq!(app.capture.in_progress(), Some(CaptureMode::Window));
-        assert_eq!(fake.clipboard(), None, "nothing is exported before a click");
+        assert!(
+            editor_images(&app).is_empty(),
+            "nothing opens before a click"
+        );
 
         // One selection at a time.
         let _ = start(&mut app, CaptureMode::Window);
         let _ = start(&mut app, CaptureMode::Rectangle);
         assert_eq!(overlays(&app).len(), 2);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
     }
 
     #[test]
-    fn a_clicked_window_is_captured_directly_then_copied_and_saved() {
-        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+    fn a_clicked_window_is_captured_directly_and_opened_in_an_editor() {
+        let (mut app, fake) = start_small(CaptureMode::Window);
 
         // (6, 5) is on the primary display but on no window.
         pick(&mut app, WindowInput::Move(LogicalPoint::new(6.0, 5.0)));
         pick(&mut app, WindowInput::Click(LogicalPoint::new(6.0, 5.0)));
         assert_eq!(overlays(&app).len(), 2, "a click on no window is ignored");
-        assert_eq!(fake.clipboard(), None);
+        assert!(editor_images(&app).is_empty());
 
         // (2, 2) is on the front window, which covers the back one there.
         pick(&mut app, WindowInput::Move(LogicalPoint::new(2.0, 2.0)));
         pick(&mut app, WindowInput::Click(LogicalPoint::new(2.0, 2.0)));
 
         assert!(overlays(&app).is_empty(), "the overlays closed");
-        let image = fake.clipboard().expect("the window was copied");
+        let image = edited(&app);
         let direct = block_on(fake.capture_window(FRONT)).unwrap();
         assert_eq!(image, direct, "the window's own capture, not a crop");
         assert_eq!(image.size(), PhysicalSize::new(8, 6));
-
-        let files = saved(saves.path());
-        assert_eq!(files.len(), 1, "{files:?}");
-        assert_eq!(png_size(&files[0]), image.size());
         assert_eq!(app.capture.in_progress(), None);
         assert_eq!(windows(&app, WindowKind::Alert), 0);
     }
 
     #[test]
     fn escape_cancels_a_window_capture() {
-        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+        let (mut app, _fake) = start_small(CaptureMode::Window);
         pick(&mut app, WindowInput::Move(LogicalPoint::new(2.0, 2.0)));
         pick(&mut app, WindowInput::Escape);
 
@@ -686,8 +667,7 @@ mod tests {
 
         // Input after the session ends goes nowhere.
         pick(&mut app, WindowInput::Click(LogicalPoint::new(2.0, 2.0)));
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
 
         let _ = start(&mut app, CaptureMode::Window);
         assert_eq!(overlays(&app).len(), 2, "a new capture can start");
@@ -695,7 +675,7 @@ mod tests {
 
     #[test]
     fn a_window_capture_withheld_by_the_os_opens_the_guidance() {
-        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+        let (mut app, fake) = start_small(CaptureMode::Window);
         app.platform.capture = Box::new(WindowFails(
             fake.clone(),
             Error::PermissionDenied(Permission::ScreenRecording),
@@ -706,14 +686,13 @@ mod tests {
         assert_eq!(windows(&app, WindowKind::Permission), 1);
         assert_eq!(windows(&app, WindowKind::Alert), 0);
         assert_eq!(app.capture.in_progress(), None);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
     }
 
     #[test]
     fn a_window_that_cannot_be_captured_is_reported() {
         // E.g. the window closed while the overlays were up.
-        let (mut app, fake, saves) = start_small(CaptureMode::Window);
+        let (mut app, fake) = start_small(CaptureMode::Window);
         app.platform.capture = Box::new(WindowFails(
             fake.clone(),
             Error::Platform("no window with id 7".into()),
@@ -724,8 +703,7 @@ mod tests {
         assert_eq!(windows(&app, WindowKind::Alert), 1);
         assert_eq!(windows(&app, WindowKind::Permission), 0);
         assert_eq!(app.capture.in_progress(), None);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
     }
 
     #[test]
@@ -735,7 +713,7 @@ mod tests {
             (Error::Platform("SCShareableContent failed".into()), 1, 0),
             (Error::PermissionDenied(Permission::ScreenRecording), 0, 1),
         ] {
-            let (mut app, _default_desktop, saves) = app();
+            let (mut app, _default_desktop) = App::for_test();
             let fake = small_desktop();
             app.platform = fake.platform();
             app.platform.window_list = Box::new(ListFails(error.clone()));
@@ -745,35 +723,32 @@ mod tests {
             assert_eq!(windows(&app, WindowKind::Alert), alerts, "{error}");
             assert_eq!(windows(&app, WindowKind::Permission), guidance, "{error}");
             assert_eq!(app.capture.in_progress(), None, "{error}");
-            assert_eq!(fake.clipboard(), None, "{error}");
-            assert!(saved(saves.path()).is_empty(), "{error}");
+            assert!(editor_images(&app).is_empty(), "{error}");
         }
     }
 
     #[test]
     fn a_rectangle_capture_opens_one_overlay_per_display() {
-        let (mut app, fake, saves) = start_rectangle();
+        let (mut app, _fake) = start_rectangle();
 
         assert_eq!(overlays(&app).len(), 2);
         assert_eq!(covered(&app), HashSet::from([DisplayId(1), DisplayId(2)]));
         assert_eq!(app.capture.in_progress(), Some(CaptureMode::Rectangle));
-        assert_eq!(
-            fake.clipboard(),
-            None,
-            "nothing is exported before a commit"
+        assert!(
+            editor_images(&app).is_empty(),
+            "nothing opens before a commit"
         );
 
         // One selection at a time.
         let _ = start(&mut app, CaptureMode::Rectangle);
         let _ = start(&mut app, CaptureMode::Display);
         assert_eq!(overlays(&app).len(), 2);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
     }
 
     #[test]
-    fn a_committed_rectangle_is_cropped_at_the_largest_scale_then_copied_and_saved() {
-        let (mut app, fake, saves) = start_rectangle();
+    fn a_committed_rectangle_is_cropped_at_the_largest_scale_and_opened_in_an_editor() {
+        let (mut app, fake) = start_rectangle();
 
         // From (-3, -1) on the 1× display to (2, 2) on the 2× primary: 5 × 3
         // logical points, output at 2×.
@@ -783,7 +758,7 @@ mod tests {
         select(&mut app, Input::Release(to));
 
         assert!(overlays(&app).is_empty(), "the overlays closed");
-        let image = fake.clipboard().expect("the selection was copied");
+        let image = edited(&app);
         assert_eq!(image.size(), PhysicalSize::new(10, 6));
 
         let captures = block_on(fake.platform().capture.capture_displays()).unwrap();
@@ -803,29 +778,24 @@ mod tests {
         }
         // (1, -0.5) is above the primary and right of the 1× display.
         assert_eq!(image.pixel(8, 1).unwrap().a, 0, "gaps are transparent");
-
-        let files = saved(saves.path());
-        assert_eq!(files.len(), 1, "{files:?}");
-        assert_eq!(png_size(&files[0]), image.size());
         assert_eq!(app.capture.in_progress(), None);
         assert_eq!(windows(&app, WindowKind::Alert), 0);
     }
 
     #[test]
-    fn escape_closes_the_overlays_and_exports_nothing() {
-        let (mut app, fake, saves) = start_rectangle();
+    fn escape_closes_the_overlays_and_opens_nothing() {
+        let (mut app, _fake) = start_rectangle();
         select(&mut app, Input::Press(LogicalPoint::new(1.0, 1.0)));
         select(&mut app, Input::Move(LogicalPoint::new(6.0, 5.0)));
         select(&mut app, Input::Escape);
 
         assert!(overlays(&app).is_empty());
         assert_eq!(app.capture.in_progress(), None);
-        assert_eq!(fake.clipboard(), None);
-        assert!(saved(saves.path()).is_empty());
+        assert!(editor_images(&app).is_empty());
 
         // Input after the session ends goes nowhere.
         select(&mut app, Input::Release(LogicalPoint::new(6.0, 5.0)));
-        assert_eq!(fake.clipboard(), None);
+        assert!(editor_images(&app).is_empty());
 
         let _ = start(&mut app, CaptureMode::Rectangle);
         assert_eq!(overlays(&app).len(), 2, "a new capture can start");
@@ -834,7 +804,7 @@ mod tests {
     #[test]
     fn an_overlay_closed_from_outside_cancels_the_selection() {
         for mode in [CaptureMode::Rectangle, CaptureMode::Window] {
-            let (mut app, fake, saves) = start_small(mode);
+            let (mut app, _fake) = start_small(mode);
             let closed = overlays(&app)[0];
             let _ = app.settle(AppMessage::WindowClosed(closed));
 
@@ -843,8 +813,7 @@ mod tests {
                 "{mode}: the other overlays closed too"
             );
             assert_eq!(app.capture.in_progress(), None, "{mode}");
-            assert_eq!(fake.clipboard(), None, "{mode}");
-            assert!(saved(saves.path()).is_empty(), "{mode}");
+            assert!(editor_images(&app).is_empty(), "{mode}");
         }
     }
 }

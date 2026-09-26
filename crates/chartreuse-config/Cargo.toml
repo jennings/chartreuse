@@ -12,7 +12,8 @@ publish.workspace = true
 chartreuse-core.workspace = true
 chartreuse-imaging.workspace = true
 chrono.workspace = true
-dirs.workspace = true
+# The platform's standard folders (settings, pictures, home).
+dirs = "6.0.0"
 serde = { version = "1.0.229", features = ["derive"] }
 # Atomic writes of the settings file.
 tempfile.workspace = true

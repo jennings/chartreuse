@@ -49,6 +49,14 @@ pub struct State {
     notices: HashMap<window::Id, Notice>,
 }
 
+impl State {
+    /// The notices of the open alerts, in no particular order.
+    #[cfg(test)]
+    pub fn notices(&self) -> impl Iterator<Item = &Notice> {
+        self.notices.values()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// The OK button of an alert window.

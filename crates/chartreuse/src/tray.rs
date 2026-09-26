@@ -4,14 +4,15 @@
 //! run loop starts, and the status item must be created once it runs. [`update`]
 //! installs the item and keeps its handle in [`State`]; while the handle is there,
 //! [`subscription`] delivers menu choices as [`Message::Menu`]. The capture items
-//! start a capture (`capture::Message::Start`); Quit quits.
+//! start a capture (`capture::Message::Start`), the open items open an image
+//! (`import::Message::FromClipboard` and `FromFile`), and Quit quits.
 
 use chartreuse_platform::{MenuAction, StatusItemHandle};
 use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
-use crate::{capture, events};
+use crate::{capture, events, import};
 
 /// This feature's part of the app state ([`App::tray`]).
 #[derive(Debug, Default)]
@@ -68,7 +69,11 @@ fn menu_action(action: MenuAction) -> Task<AppMessage> {
             iced::exit()
         }
         MenuAction::Capture(mode) => Task::done(AppMessage::Capture(capture::Message::Start(mode))),
-        MenuAction::OpenFromClipboard | MenuAction::OpenFromFile | MenuAction::Settings => {
+        MenuAction::OpenFromClipboard => {
+            Task::done(AppMessage::Import(import::Message::FromClipboard))
+        }
+        MenuAction::OpenFromFile => Task::done(AppMessage::Import(import::Message::FromFile)),
+        MenuAction::Settings => {
             tracing::info!(?action, "status item menu action (not wired up yet)");
             Task::none()
         }
@@ -152,19 +157,13 @@ mod tests {
     }
 
     #[test]
-    fn quit_exits_and_the_other_actions_do_nothing_yet() {
+    fn quit_exits_and_settings_does_nothing_yet() {
         let (mut app, _fake) = App::for_test();
         let quit = actions(app.update(AppMessage::Tray(Message::Menu(MenuAction::Quit))));
         assert!(matches!(quit.as_slice(), [Action::Exit]), "{quit:?}");
 
-        for action in [
-            MenuAction::OpenFromClipboard,
-            MenuAction::OpenFromFile,
-            MenuAction::Settings,
-        ] {
-            let task = app.update(AppMessage::Tray(Message::Menu(action)));
-            assert!(actions(task).is_empty(), "{action:?}");
-        }
+        let task = app.update(AppMessage::Tray(Message::Menu(MenuAction::Settings)));
+        assert!(actions(task).is_empty());
     }
 
     #[test]
