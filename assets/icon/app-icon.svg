@@ -7,8 +7,8 @@
 
     The `accent` fill is the release accent; `cargo xtask` overrides it with a
     style sheet for the development flavor. The small Windows and Linux icons
-    crop the canvas to the body and turn off the `shadow` class's filter.
-    Rendered by `xtask/src/icon.rs`.
+    and the tray icons crop the canvas to the body and turn off the `shadow`
+    class's filter. Rendered by `xtask/src/icon.rs`.
   -->
   <defs>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">

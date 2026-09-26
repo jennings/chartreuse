@@ -30,6 +30,8 @@ Commands:
   dev-cert  create a self-signed development signing identity in its own
             keychain (macOS, once per machine), so the Screen Recording
             permission survives rebuilds
+  icons     re-render the status item and tray icons checked in under
+            assets/icon/generated from their SVG sources (after editing one)
   release   release build for this OS, archived into target/dist (emptied
             first) as Chartreuse-<version>-<os>-<arch>: on macOS a zipped
             release-flavor Chartreuse.app signed with
@@ -57,6 +59,7 @@ fn main() -> ExitCode {
         ["bundle"] => bundle::Bundle::development().and_then(|b| b.build().map(drop)),
         ["run"] => launch::launch(false),
         ["run", "--fake"] => launch::launch(true),
+        ["icons"] => icon::icons(),
         ["dev-cert"] => dev_cert::dev_cert(),
         ["release"] => release::release(false),
         ["release", "--allow-ad-hoc"] => release::release(true),
