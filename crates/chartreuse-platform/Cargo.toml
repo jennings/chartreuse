@@ -31,7 +31,7 @@ objc2-uniform-type-identifiers.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 chartreuse-imaging.workspace = true
-windows = { version = "0.62.2", features = [
+windows = { workspace = true, features = [
     "Foundation",
     "Graphics",
     "Graphics_Capture",
