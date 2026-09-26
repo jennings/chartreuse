@@ -21,13 +21,15 @@
 //! Per annotation, in its [`Style`]'s color (straight alpha), exactly as the
 //! canvas docs describe:
 //!
-//! - Strokes (a line, an arrow's shaft, a rectangle's outline) are
-//!   `stroke_width` wide, centered on the geometry, with round caps and round
-//!   joins. A zero-length stroke is a disc `stroke_width` across; a stroke
-//!   width of zero (or less) draws nothing.
+//! - Strokes (a line, an arrow's shaft, a rectangle's or ellipse's outline)
+//!   are `stroke_width` wide, centered on the geometry, with round caps and
+//!   round joins. A zero-length stroke is a disc `stroke_width` across; a
+//!   stroke width of zero (or less) draws nothing.
 //! - An arrow is its shaft stroked from `start` to [`ArrowHead::base`], then
 //!   the head triangle `[tip, left, right]` filled, never stroked.
 //! - A rectangle is the closed outline through [`Rect::corners`].
+//! - An ellipse is the closed path of the Béziers of [`Ellipse::curves`];
+//!   one of zero size is a dot.
 //! - Text is laid out by [`font::layout`] and each glyph rasterized by swash,
 //!   placed as iced places canvas text: the glyph's pixel origin is
 //!   [`LayoutGlyph::physical`] with the text's position as the offset, moved
@@ -50,9 +52,9 @@
 //! A new [`Shape`] variant needs one arm in the private `Flattener::draw`,
 //! built from its helpers:
 //!
-//! - ellipses, pen, and highlighter strokes are paths: build a tiny-skia
-//!   path and pass it to `Flattener::stroke` or `Flattener::fill` (the
-//!   highlighter with its translucent color, like any other);
+//! - pen and highlighter strokes are paths: build a tiny-skia path and pass
+//!   it to `Flattener::stroke` or `Flattener::fill` (the highlighter with
+//!   its translucent color, like any other);
 //! - step markers are a filled disc plus text, from the same helpers and the
 //!   text rasterizer;
 //! - blur and pixelate regions act on everything below them: call
@@ -67,6 +69,7 @@
 //! [`LayoutGlyph::physical`]: iced::advanced::graphics::text::cosmic_text::LayoutGlyph::physical
 //! [`ArrowHead::base`]: crate::model::ArrowHead::base
 //! [`Rect::corners`]: crate::model::Rect::corners
+//! [`Ellipse::curves`]: crate::model::Ellipse::curves
 //! [`font::layout`]: crate::font::layout
 
 mod text;
@@ -161,6 +164,20 @@ impl Flattener {
                     path.move_to(a.x, a.y);
                     for corner in [b, c, d] {
                         path.line_to(corner.x, corner.y);
+                    }
+                    path.close();
+                    self.stroke(path.finish(), width, &paint);
+                }
+            }
+            Shape::Ellipse(ellipse) => {
+                let (start, curves) = ellipse.curves();
+                if ellipse.rect.width() == 0.0 && ellipse.rect.height() == 0.0 {
+                    self.dot(start, width, &paint);
+                } else {
+                    let mut path = PathBuilder::new();
+                    path.move_to(start.x, start.y);
+                    for [a, b, to] in curves {
+                        path.cubic_to(a.x, a.y, b.x, b.y, to.x, to.y);
                     }
                     path.close();
                     self.stroke(path.finish(), width, &paint);

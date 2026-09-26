@@ -5,7 +5,8 @@ use chartreuse_core::image::Image;
 use super::*;
 use crate::font;
 use crate::model::{
-    distance_to_segment, distance_to_triangle, Arrow, Line, Rect, Rectangle, Style, Text,
+    distance_to_ellipse, distance_to_segment, distance_to_triangle, Arrow, Ellipse, Line, Rect,
+    Rectangle, Style, Text,
 };
 
 /// How far outside a shape's edge a pixel's center can be and still be
@@ -100,6 +101,19 @@ fn a_rectangle_is_its_outline_with_round_outer_corners() {
 }
 
 #[test]
+fn an_ellipse_is_its_outline_stroked() {
+    let image = base(70, 50);
+    let rect = Rect::from_corners(Point::new(8.5, 6.0), Point::new(61.0, 44.25));
+    let result = flattened(
+        image.clone(),
+        [(Shape::Ellipse(Ellipse { rect }), style(BLUE, 6.0))],
+    );
+    assert_covers(&image, &result, BLUE, |p| {
+        distance_to_ellipse(p, rect) - 3.0
+    });
+}
+
+#[test]
 fn an_arrow_is_a_shaft_to_the_head_base_and_a_filled_head() {
     let image = base(80, 50);
     let arrow = Arrow {
@@ -133,6 +147,7 @@ fn zero_length_strokes_are_discs_and_zero_width_draws_nothing() {
             end: center,
         }),
         Shape::Rectangle(Rectangle { rect: point }),
+        Shape::Ellipse(Ellipse { rect: point }),
     ] {
         let result = flattened(image.clone(), [(shape.clone(), style(BLUE, 10.0))]);
         assert_covers(&image, &result, BLUE, |p| (p - center).length() - 5.0);
@@ -330,6 +345,14 @@ mod canvas {
             at(30.0, 250.0),
             at(300.0, 120.0),
         );
+        draw(
+            &mut editor,
+            ToolKind::Ellipse,
+            Rgba8::rgb(10, 132, 255),
+            6.0,
+            at(250.0, 20.0),
+            at(390.25, 110.5),
+        );
 
         editor.update(Message::Color(Rgba8::rgb(250, 250, 250)));
         editor.update(Message::FontSize(30.0));
@@ -348,7 +371,7 @@ mod canvas {
             at(140.0, 200.0),
             at(380.0, 230.0),
         );
-        assert_eq!(editor.document().annotations().len(), 5);
+        assert_eq!(editor.document().annotations().len(), 6);
 
         let flat = flatten(editor.document()).unwrap();
         let canvas = canvas_image(&editor);

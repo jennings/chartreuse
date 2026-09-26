@@ -11,7 +11,7 @@ use chartreuse_core::color::Rgba8;
 ///
 /// # Strokes
 ///
-/// Every stroke (a line, an arrow's shaft, a rectangle's outline) is
+/// Every stroke (a line, an arrow's shaft, a rectangle's or ellipse's outline) is
 /// `stroke_width` wide, centered on the annotation's geometry, with **round
 /// caps and round joins**: it covers exactly the points within
 /// `stroke_width / 2` of the stroked path. Filled parts (an arrowhead) are

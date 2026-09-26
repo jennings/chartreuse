@@ -68,6 +68,23 @@ pub fn shape(frame: &mut Frame, viewport: &Viewport, shape: &Shape, style: &Styl
                 frame.stroke(&outline, stroke(width, paint));
             }
         }
+        Shape::Ellipse(ellipse) => {
+            let (start, curves) = ellipse.curves();
+            let start = viewport.to_canvas(start);
+            if ellipse.rect.width() == 0.0 && ellipse.rect.height() == 0.0 {
+                dot(frame, start, width, paint);
+            } else {
+                let outline = Path::new(|path| {
+                    path.move_to(start);
+                    for curve in curves {
+                        let [a, b, to] = curve.map(|p| viewport.to_canvas(p));
+                        path.bezier_curve_to(a, b, to);
+                    }
+                    path.close();
+                });
+                frame.stroke(&outline, stroke(width, paint));
+            }
+        }
         Shape::Text(text) => frame.fill_text(canvas_text(
             &text.content,
             viewport.to_canvas(text.position),

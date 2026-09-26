@@ -1,10 +1,13 @@
 //! Selection handles: the points of a lone selected annotation that can be
-//! dragged to reshape it (a line's or arrow's ends, a rectangle's corners).
-//! Text has none; its size follows its font size.
+//! dragged to reshape it (a line's or arrow's ends, the corners of a
+//! rectangle or of an ellipse's bounding box). Text has none; its size
+//! follows its font size.
 
 use super::line::snap_45;
 use super::rectangle::square;
-use crate::model::{AnnotationId, Command, Document, Point, Rect, Shape, Vector};
+use crate::model::{
+    AnnotationId, Command, Document, Ellipse, Point, Rect, Rectangle, Shape, Vector,
+};
 
 /// A handle's drawn size (a square), in canvas pixels.
 pub const HANDLE_SIZE: f32 = 8.0;
@@ -13,16 +16,16 @@ pub const HANDLE_SIZE: f32 = 8.0;
 pub const HANDLE_REACH: f32 = 7.0;
 
 /// A draggable point of a lone selected annotation (see [`handles`]): a
-/// line's or arrow's ends, or a rectangle's corners. Text has none; its size
-/// follows its font size.
+/// line's or arrow's ends, or the corners of a rectangle or of an ellipse's
+/// bounding box. Text has none; its size follows its font size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Handle {
     /// A line's or arrow's `start`.
     Start,
     /// A line's or arrow's `end` (an arrow's tip).
     End,
-    /// A rectangle's corner, as an index into [`Rect::corners`] (clockwise
-    /// from the top-left).
+    /// A corner of a rectangle or of an ellipse's bounding box, as an index
+    /// into [`Rect::corners`] (clockwise from the top-left).
     Corner(usize),
 }
 
@@ -32,20 +35,31 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, Point)> {
     match shape {
         Shape::Line(line) => vec![(Handle::Start, line.start), (Handle::End, line.end)],
         Shape::Arrow(arrow) => vec![(Handle::Start, arrow.start), (Handle::End, arrow.end)],
-        Shape::Rectangle(rectangle) => rectangle
-            .rect
-            .corners()
-            .into_iter()
-            .enumerate()
-            .map(|(index, corner)| (Handle::Corner(index), corner))
-            .collect(),
+        Shape::Rectangle(Rectangle { rect }) | Shape::Ellipse(Ellipse { rect }) => corners(*rect),
         Shape::Text(_) => Vec::new(),
     }
 }
 
+fn corners(rect: Rect) -> Vec<(Handle, Point)> {
+    rect.corners()
+        .into_iter()
+        .enumerate()
+        .map(|(index, corner)| (Handle::Corner(index), corner))
+        .collect()
+}
+
+/// `rect` with corner `index` dragged to `to`, the opposite corner fixed;
+/// `constrain` makes it square.
+fn drag_corner(rect: Rect, index: usize, to: Point, constrain: bool) -> Rect {
+    let opposite = rect.corners()[(index + 2) % 4];
+    let to = if constrain { square(opposite, to) } else { to };
+    Rect::from_corners(opposite, to)
+}
+
 /// `shape` with `handle` dragged to `to`. A line's or arrow's other end stays
-/// put, as does a rectangle's opposite corner. `constrain` (Shift) snaps a
-/// line or arrow to 45° and makes a rectangle square.
+/// put, as does the opposite corner of a rectangle or an ellipse's bounding
+/// box. `constrain` (Shift) snaps a line or arrow to 45° and makes a
+/// rectangle square or an ellipse a circle.
 #[must_use]
 pub fn reshaped(shape: &Shape, handle: Handle, to: Point, constrain: bool) -> Shape {
     let mut shape = shape.clone();
@@ -74,10 +88,11 @@ pub fn reshaped(shape: &Shape, handle: Handle, to: Point, constrain: bool) -> Sh
                 to
             };
         }
-        (Shape::Rectangle(rectangle), Handle::Corner(index)) => {
-            let opposite = rectangle.rect.corners()[(index + 2) % 4];
-            let to = if constrain { square(opposite, to) } else { to };
-            rectangle.rect = Rect::from_corners(opposite, to);
+        (
+            Shape::Rectangle(Rectangle { rect }) | Shape::Ellipse(Ellipse { rect }),
+            Handle::Corner(index),
+        ) => {
+            *rect = drag_corner(*rect, index, to, constrain);
         }
         _ => {}
     }
@@ -188,6 +203,23 @@ mod tests {
         assert_eq!(
             reshaped(&shape, Handle::Corner(2), Point::new(70.0, 40.0), true),
             rectangle(Point::new(10.0, 10.0), Point::new(70.0, 70.0))
+        );
+    }
+
+    #[test]
+    fn an_ellipse_reshapes_by_its_bounding_box_corners() {
+        let rect = Rect::from_corners(Point::new(10.0, 10.0), Point::new(50.0, 30.0));
+        let shape = Shape::Ellipse(Ellipse { rect });
+        assert_eq!(
+            handles(&shape),
+            handles(&Shape::Rectangle(Rectangle { rect })),
+        );
+        // Shift makes it a circle, the opposite corner fixed.
+        assert_eq!(
+            reshaped(&shape, Handle::Corner(0), Point::new(-10.0, 0.0), true),
+            Shape::Ellipse(Ellipse {
+                rect: Rect::from_corners(Point::new(-10.0, -30.0), Point::new(50.0, 30.0)),
+            })
         );
     }
 

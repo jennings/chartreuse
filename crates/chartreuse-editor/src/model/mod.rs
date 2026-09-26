@@ -19,7 +19,8 @@
 //! - [`Document`] owns the base image, the [`Annotation`]s in z-order (index 0
 //!   at the bottom), the selection, and the undo history.
 //! - An [`Annotation`] is a stable [`AnnotationId`], a [`Shape`] (one variant
-//!   per kind: [`Line`], [`Arrow`], [`Rectangle`], [`Text`]) and a [`Style`].
+//!   per kind: [`Line`], [`Arrow`], [`Rectangle`], [`Ellipse`], [`Text`]) and
+//!   a [`Style`].
 //! - Edits go through [`Document::add`] and [`Document::apply`] with a
 //!   [`Command`]; each is one undo step, and no-ops are not recorded.
 //! - [`Document::annotation_at`] finds the topmost annotation under a point;
@@ -35,8 +36,12 @@ mod geometry;
 mod history;
 mod style;
 
-pub use annotation::{Annotation, AnnotationId, Arrow, ArrowHead, Line, Rectangle, Shape, Text};
+pub use annotation::{
+    Annotation, AnnotationId, Arrow, ArrowHead, Ellipse, Line, Rectangle, Shape, Text,
+};
 pub use document::Document;
-pub use geometry::{distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector};
+pub use geometry::{
+    distance_to_ellipse, distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector,
+};
 pub use history::{Command, Reorder};
 pub use style::{Style, StylePatch};

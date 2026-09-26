@@ -27,6 +27,7 @@
 
 mod arrow;
 mod drag;
+mod ellipse;
 mod handles;
 mod line;
 mod rectangle;
@@ -41,6 +42,7 @@ use crate::model::{AnnotationId, Document, Point, Shape, Style, Vector};
 
 pub use arrow::ArrowTool;
 pub use drag::{DragShape, DragTool};
+pub use ellipse::EllipseTool;
 pub use handles::{handle_at, handles, reshaped, Handle, HANDLE_REACH, HANDLE_SIZE};
 pub use line::LineTool;
 pub use rectangle::RectangleTool;
@@ -63,16 +65,18 @@ pub enum ToolKind {
     Line,
     Arrow,
     Rectangle,
+    Ellipse,
     Text,
 }
 
 impl ToolKind {
     /// Every kind, in toolbar order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Select,
         Self::Line,
         Self::Arrow,
         Self::Rectangle,
+        Self::Ellipse,
         Self::Text,
     ];
 
@@ -84,6 +88,7 @@ impl ToolKind {
             Self::Line => "Line",
             Self::Arrow => "Arrow",
             Self::Rectangle => "Rectangle",
+            Self::Ellipse => "Ellipse",
             Self::Text => "Text",
         }
     }
@@ -96,6 +101,7 @@ impl ToolKind {
             Self::Line => 'l',
             Self::Arrow => 'a',
             Self::Rectangle => 'r',
+            Self::Ellipse => 'e',
             Self::Text => 't',
         }
     }
@@ -120,6 +126,7 @@ impl ToolKind {
             Self::Line => Box::<LineTool>::default(),
             Self::Arrow => Box::<ArrowTool>::default(),
             Self::Rectangle => Box::<RectangleTool>::default(),
+            Self::Ellipse => Box::<EllipseTool>::default(),
             Self::Text => Box::<TextTool>::default(),
         }
     }

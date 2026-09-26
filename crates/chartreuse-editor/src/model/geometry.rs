@@ -313,6 +313,92 @@ pub fn distance_to_triangle(point: Point, corners: [Point; 3]) -> f32 {
         .min(distance_to_segment(point, c, a))
 }
 
+/// The distance from `point` to the outline of the ellipse inscribed in
+/// `bounds` (axis-aligned, centered in it, touching all four sides), whether
+/// `point` is inside or outside. An ellipse of zero width or height is the
+/// segment it collapses to, and one of zero size is a single point.
+///
+/// Exact up to floating-point rounding: it finds the nearest outline point
+/// by bisection (David Eberly, "Distance from a Point to an Ellipse"), in
+/// `f64`.
+#[must_use]
+pub fn distance_to_ellipse(point: Point, bounds: Rect) -> f32 {
+    let center = bounds.center();
+    let radii = (
+        f64::from(bounds.width()) / 2.0,
+        f64::from(bounds.height()) / 2.0,
+    );
+    // By symmetry, work in the first quadrant, with the major axis first.
+    let offset = (
+        f64::from((point.x - center.x).abs()),
+        f64::from((point.y - center.y).abs()),
+    );
+    let ((e0, y0), (e1, y1)) = if radii.0 >= radii.1 {
+        ((radii.0, offset.0), (radii.1, offset.1))
+    } else {
+        ((radii.1, offset.1), (radii.0, offset.0))
+    };
+    let distance = if e1 == 0.0 {
+        // A segment along the major axis (or a point).
+        (y0 - e0).max(0.0).hypot(y1)
+    } else if y1 > 0.0 {
+        if y0 > 0.0 {
+            let (z0, z1) = (y0 / e0, y1 / e1);
+            let g = z0 * z0 + z1 * z1 - 1.0;
+            if g == 0.0 {
+                0.0
+            } else {
+                let r0 = (e0 / e1) * (e0 / e1);
+                let s = ellipse_root(r0, z0, z1, g);
+                let x0 = r0 * y0 / (s + r0);
+                let x1 = y1 / (s + 1.0);
+                (x0 - y0).hypot(x1 - y1)
+            }
+        } else {
+            (y1 - e1).abs()
+        }
+    } else {
+        let numerator = e0 * y0;
+        let denominator = e0 * e0 - e1 * e1;
+        if numerator < denominator {
+            let ratio = numerator / denominator;
+            let x0 = e0 * ratio;
+            let x1 = e1 * (1.0 - ratio * ratio).sqrt();
+            (x0 - y0).hypot(x1)
+        } else {
+            (y0 - e0).abs()
+        }
+    };
+    // Narrowing back to the model's precision is intended.
+    distance as f32
+}
+
+/// The root `s` of `(r0·z0 / (s + r0))² + (z1 / (s + 1))² = 1` that
+/// [`distance_to_ellipse`] needs, by bisection until the interval stops
+/// shrinking.
+fn ellipse_root(r0: f64, z0: f64, z1: f64, g: f64) -> f64 {
+    let n0 = r0 * z0;
+    let mut s0 = z1 - 1.0;
+    let mut s1 = if g < 0.0 { 0.0 } else { n0.hypot(z1) - 1.0 };
+    let mut s = 0.0;
+    for _ in 0..200 {
+        s = (s0 + s1) / 2.0;
+        if s == s0 || s == s1 {
+            break;
+        }
+        let (ratio0, ratio1) = (n0 / (s + r0), z1 / (s + 1.0));
+        let g = ratio0 * ratio0 + ratio1 * ratio1 - 1.0;
+        if g > 0.0 {
+            s0 = s;
+        } else if g < 0.0 {
+            s1 = s;
+        } else {
+            break;
+        }
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,5 +509,63 @@ mod tests {
             Point::new(10.0, 0.0),
         ];
         assert!(close(distance_to_triangle(Point::new(5.0, 2.0), flat), 2.0));
+    }
+
+    #[test]
+    fn ellipse_distance_is_measured_to_the_outline_inside_and_out() {
+        // Radii 10 and 5, centered at (10, 5).
+        let bounds = Rect::new(Point::ORIGIN, Size::new(20.0, 10.0));
+        // On the axes: straight to the vertex.
+        assert!(close(
+            distance_to_ellipse(Point::new(25.0, 5.0), bounds),
+            5.0
+        ));
+        assert!(close(
+            distance_to_ellipse(Point::new(10.0, -3.0), bounds),
+            3.0
+        ));
+        assert!(close(
+            distance_to_ellipse(Point::new(10.0, 5.0), bounds),
+            5.0
+        ));
+        // On the outline itself.
+        let angle = 0.7_f32;
+        let on = Point::new(10.0 + 10.0 * angle.cos(), 5.0 + 5.0 * angle.sin());
+        assert!(distance_to_ellipse(on, bounds) < 1e-3);
+        // Off-axis, the nearest point is not radial: check against a dense
+        // sampling of the outline, from both sides.
+        for p in [
+            Point::new(24.0, 14.0),
+            Point::new(13.0, 6.0),
+            Point::new(1.0, 1.0),
+        ] {
+            let sampled = (0..20_000)
+                .map(|i| {
+                    let t = i as f32 / 20_000.0 * std::f32::consts::TAU;
+                    p.distance(Point::new(10.0 + 10.0 * t.cos(), 5.0 + 5.0 * t.sin()))
+                })
+                .fold(f32::INFINITY, f32::min);
+            assert!(
+                (distance_to_ellipse(p, bounds) - sampled).abs() < 1e-2,
+                "{p:?}"
+            );
+        }
+        // A circle is exactly radial.
+        let circle = Rect::new(Point::ORIGIN, Size::new(10.0, 10.0));
+        assert!(close(
+            distance_to_ellipse(Point::new(8.0, 9.0), circle),
+            0.0
+        ));
+    }
+
+    #[test]
+    fn degenerate_ellipses_are_segments_and_points() {
+        let flat = Rect::from_corners(Point::new(0.0, 5.0), Point::new(10.0, 5.0));
+        assert!(close(distance_to_ellipse(Point::new(5.0, 8.0), flat), 3.0));
+        assert!(close(distance_to_ellipse(Point::new(13.0, 9.0), flat), 5.0));
+        let tall = Rect::from_corners(Point::new(2.0, 0.0), Point::new(2.0, 10.0));
+        assert!(close(distance_to_ellipse(Point::new(6.0, 5.0), tall), 4.0));
+        let dot = Rect::from_corners(Point::new(1.0, 1.0), Point::new(1.0, 1.0));
+        assert!(close(distance_to_ellipse(Point::new(4.0, 5.0), dot), 5.0));
     }
 }

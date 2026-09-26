@@ -19,7 +19,9 @@ use chartreuse_core::color::Rgba8;
 use chartreuse_core::geometry::PhysicalSize;
 use chartreuse_core::image::Image;
 use chartreuse_editor::flatten::flatten;
-use chartreuse_editor::model::{Arrow, Document, Line, Point, Rect, Rectangle, Shape, Style, Text};
+use chartreuse_editor::model::{
+    Arrow, Document, Ellipse, Line, Point, Rect, Rectangle, Shape, Style, Text,
+};
 use chartreuse_imaging::{decode, encode, Format};
 
 /// The largest per-channel difference from the reference that still passes.
@@ -77,6 +79,12 @@ fn arrow(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
 
 fn rectangle(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
     Shape::Rectangle(Rectangle {
+        rect: Rect::from_corners(Point::new(ax, ay), Point::new(bx, by)),
+    })
+}
+
+fn ellipse(ax: f32, ay: f32, bx: f32, by: f32) -> Shape {
+    Shape::Ellipse(Ellipse {
         rect: Rect::from_corners(Point::new(ax, ay), Point::new(bx, by)),
     })
 }
@@ -183,6 +191,22 @@ fn rectangles() {
         ],
     );
     check("rectangle", &image);
+}
+
+#[test]
+fn ellipses() {
+    let image = flattened(
+        base(112, 72),
+        [
+            (ellipse(8.0, 8.0, 70.0, 64.0), style(RED, 6.0)),
+            // A circle at fractional coordinates, thin.
+            (ellipse(40.5, 20.25, 72.5, 52.25), style(YELLOW, 1.5)),
+            // Flat: a line with round ends. And a dot.
+            (ellipse(78.0, 12.0, 106.0, 12.0), style(BLUE, 4.0)),
+            (ellipse(92.0, 50.0, 92.0, 50.0), style(BLUE, 12.0)),
+        ],
+    );
+    check("ellipse", &image);
 }
 
 #[test]

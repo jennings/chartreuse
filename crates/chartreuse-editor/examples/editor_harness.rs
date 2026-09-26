@@ -67,7 +67,7 @@ fn theme(_harness: &Harness) -> Theme {
     )
 }
 
-/// Messages that draw a rectangle, an arrow, a line, and two lines of text,
+/// Messages that draw one annotation of each kind (two lines of text),
 /// as a canvas exactly [`MARGIN`] larger than the image on every side would
 /// send them (a fitted view at 1:1, so canvas = document + margin).
 fn demo() -> Vec<Message> {
@@ -102,6 +102,8 @@ fn demo() -> Vec<Message> {
     script.extend(drag(at(1150.0, 750.0), at(720.0, 470.0)));
     script.push(Message::Tool(ToolKind::Line));
     script.extend(drag(at(200.0, 820.0), at(900.0, 880.0)));
+    script.push(Message::Tool(ToolKind::Ellipse));
+    script.extend(drag(at(1000.0, 120.0), at(1450.0, 400.0)));
     script.push(Message::Tool(ToolKind::Text));
     script.extend([
         input(InputKind::Press {

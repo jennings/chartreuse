@@ -14,7 +14,9 @@
 //! Ids increase in creation order and are never reused, and undo restores the
 //! original id, so that rank is stable under reordering and undo.
 
-use super::geometry::{distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector};
+use super::geometry::{
+    distance_to_ellipse, distance_to_segment, distance_to_triangle, Point, Rect, Size, Vector,
+};
 use super::style::Style;
 
 /// A document-unique, stable annotation identifier.
@@ -73,6 +75,7 @@ pub enum Shape {
     Line(Line),
     Arrow(Arrow),
     Rectangle(Rectangle),
+    Ellipse(Ellipse),
     Text(Text),
 }
 
@@ -92,6 +95,8 @@ impl Shape {
     ///   interior does not hit, so annotations and image content inside an
     ///   outline stay clickable. (A future filled rectangle would also hit
     ///   inside.)
+    /// - Ellipse: within `stroke_width / 2 + tolerance` of the outline
+    ///   ([`distance_to_ellipse`]); like a rectangle, not inside.
     /// - Text: inside [`Text::bounds`] grown by `tolerance`.
     #[must_use]
     pub fn hit(&self, style: &Style, point: Point, tolerance: f32) -> bool {
@@ -107,6 +112,7 @@ impl Shape {
                 None => distance_to_segment(point, arrow.start, arrow.end) <= reach,
             },
             Self::Rectangle(rectangle) => rectangle.rect.distance_to_outline(point) <= reach,
+            Self::Ellipse(ellipse) => distance_to_ellipse(point, ellipse.rect) <= reach,
             Self::Text(text) => text
                 .bounds(style.font_size)
                 .expand(tolerance)
@@ -132,6 +138,7 @@ impl Shape {
                 None => Rect::from_corners(arrow.start, arrow.end).expand(half),
             },
             Self::Rectangle(rectangle) => rectangle.rect.expand(half),
+            Self::Ellipse(ellipse) => ellipse.rect.expand(half),
             Self::Text(text) => text.bounds(style.font_size),
         }
     }
@@ -148,6 +155,7 @@ impl Shape {
                 arrow.end += delta;
             }
             Self::Rectangle(rectangle) => rectangle.rect = rectangle.rect.translate(delta),
+            Self::Ellipse(ellipse) => ellipse.rect = ellipse.rect.translate(delta),
             Self::Text(text) => text.position += delta,
         }
     }
@@ -242,6 +250,46 @@ impl ArrowHead {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rectangle {
     pub rect: Rect,
+}
+
+/// An unfilled ellipse outline: the ellipse inscribed in `rect` (axis-aligned,
+/// touching the middle of each side), stroked like any stroke (see
+/// [`Style`]). One of zero width or height is the segment it collapses to,
+/// with round ends, and one of zero size is a dot.
+///
+/// Renderers draw the outline as the four cubic Béziers of
+/// [`Ellipse::curves`], so the canvas and flatten stroke the same path. They
+/// stray from the true ellipse by under 0.03% of the radius, far below a
+/// pixel for any screenshot; hit-testing uses the true ellipse.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ellipse {
+    pub rect: Rect,
+}
+
+impl Ellipse {
+    /// How far along the tangent a quarter-circle Bézier's control points sit,
+    /// per unit of radius: `4/3 × (√2 − 1)`.
+    const KAPPA: f32 = 0.552_284_8;
+
+    /// The outline as a closed path: a start point (the rightmost point) and
+    /// four cubic Béziers `[control, control, end]`, clockwise on screen, each
+    /// a quarter of the ellipse.
+    #[must_use]
+    pub fn curves(&self) -> (Point, [[Point; 3]; 4]) {
+        let c = self.rect.center();
+        let (rx, ry) = (self.rect.width() / 2.0, self.rect.height() / 2.0);
+        let (kx, ky) = (rx * Self::KAPPA, ry * Self::KAPPA);
+        let p = |x: f32, y: f32| Point::new(c.x + x, c.y + y);
+        (
+            p(rx, 0.0),
+            [
+                [p(rx, ky), p(kx, ry), p(0.0, ry)],
+                [p(-kx, ry), p(-rx, ky), p(-rx, 0.0)],
+                [p(-rx, -ky), p(-kx, -ry), p(0.0, -ry)],
+                [p(kx, -ry), p(rx, -ky), p(rx, 0.0)],
+            ],
+        )
+    }
 }
 
 /// A block of text, one or more lines separated by `\n`.
@@ -496,6 +544,54 @@ mod tests {
     }
 
     #[test]
+    fn ellipse_hits_its_outline_but_not_its_interior() {
+        // Radii 50 and 25 around (60, 35).
+        let rect = Rect::from_corners(Point::new(10.0, 10.0), Point::new(110.0, 60.0));
+        let shape = Shape::Ellipse(Ellipse { rect });
+        let style = style(4.0);
+        // The vertices, and just past the reach (2 + 1) beside them.
+        assert!(shape.hit(&style, Point::new(110.0, 35.0), 0.0));
+        assert!(shape.hit(&style, Point::new(113.0, 35.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(113.1, 35.0), 1.0));
+        assert!(shape.hit(&style, Point::new(60.0, 13.0), 1.0));
+        assert!(!shape.hit(&style, Point::new(60.0, 13.1), 1.0));
+        // The center and the rectangle's corners are far from the outline.
+        assert!(!shape.hit(&style, rect.center(), 1.0));
+        assert!(!shape.hit(&style, Point::new(11.0, 11.0), 1.0));
+        assert_eq!(shape.bounds(&style), rect.expand(2.0));
+    }
+
+    #[test]
+    fn ellipse_curves_pass_through_the_four_vertices() {
+        let ellipse = Ellipse {
+            rect: Rect::from_corners(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
+        };
+        let (start, curves) = ellipse.curves();
+        assert_eq!(start, Point::new(20.0, 5.0));
+        let ends: Vec<_> = curves.iter().map(|curve| curve[2]).collect();
+        assert_eq!(
+            ends,
+            [
+                Point::new(10.0, 10.0),
+                Point::new(0.0, 5.0),
+                Point::new(10.0, 0.0),
+                Point::new(20.0, 5.0),
+            ]
+        );
+        // Each quarter's midpoint (t = ½) lies on the true ellipse, to well
+        // under a pixel.
+        let mut from = start;
+        for [c1, c2, to] in curves {
+            let mid = Point::new(
+                (from.x + 3.0 * c1.x + 3.0 * c2.x + to.x) / 8.0,
+                (from.y + 3.0 * c1.y + 3.0 * c2.y + to.y) / 8.0,
+            );
+            assert!(distance_to_ellipse(mid, ellipse.rect) < 0.01, "{mid:?}");
+            from = to;
+        }
+    }
+
+    #[test]
     fn translate_moves_every_point_of_every_kind() {
         let delta = Vector::new(3.0, -2.0);
         let rect = Rect::from_corners(Point::ORIGIN, Point::new(4.0, 4.0));
@@ -505,6 +601,12 @@ mod tests {
             (
                 Shape::Rectangle(Rectangle { rect }),
                 Shape::Rectangle(Rectangle {
+                    rect: rect.translate(delta),
+                }),
+            ),
+            (
+                Shape::Ellipse(Ellipse { rect }),
+                Shape::Ellipse(Ellipse {
                     rect: rect.translate(delta),
                 }),
             ),
