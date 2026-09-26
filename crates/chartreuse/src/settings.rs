@@ -7,6 +7,17 @@
 //! brings it to the front if it is already open: there is at most one. Every
 //! change applies at once, to [`App::config`], and is saved.
 //!
+//! - **Hotkeys**: a recorder per capture mode. Clicking one records: the next
+//!   key combination with Ctrl, Alt or Super (Command on macOS) becomes the
+//!   mode's hotkey, keys being taken by their position on the keyboard.
+//!   Escape, clicking the recorder again, or leaving the window cancels. The
+//!   app's hotkeys are unregistered while it records, so that their
+//!   combinations reach the window. A combination another mode has is
+//!   rejected with a line saying so, and recording goes on. A combination the
+//!   system or another program holds is kept, but the line under it says it
+//!   is not active, as for any registration failure (from
+//!   `hotkeys::State::problem`, so failures at startup show too). Default puts
+//!   back the mode's default hotkey.
 //! - **After a capture**: open the editor, copy the capture, or save and copy
 //!   it ([`AfterCapture`], applied by the capture flow).
 //! - **Saving**: the folder saves go to, typed as a full path or one starting
@@ -84,15 +95,19 @@ use std::time::{Duration, SystemTime};
 
 use chartreuse_config::pattern::DEFAULT_PATTERN;
 use chartreuse_config::{
-    default_save_directory, AfterCapture, FileNamePattern, RelativeSaveDirectory, SaveDirectory,
-    Settings,
+    default_save_directory, AfterCapture, FileNamePattern, Hotkeys, RelativeSaveDirectory,
+    SaveDirectory, Settings,
 };
+use chartreuse_core::capture::CaptureMode;
+use chartreuse_core::hotkey::Hotkey;
 use chartreuse_core::{Error, Result};
 use chrono::NaiveDateTime;
 use iced::futures::channel::mpsc;
+use iced::keyboard::{self, key::Physical};
 use iced::widget::{button, column, container, radio, row, scrollable, space, text, text_input};
-use iced::{window, Element, Length, Size, Subscription, Task};
+use iced::{event, window, Element, Length, Size, Subscription, Task};
 use parking_lot::Mutex;
+use recorder::Recorded;
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
@@ -100,11 +115,19 @@ use crate::export::SAVE_FORMAT;
 use crate::hotkeys;
 use crate::windows::WindowKind;
 
+mod recorder;
+
 /// How often the settings file is checked for hand edits.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The size the settings window opens at.
-const WINDOW_SIZE: Size = Size::new(640.0, 560.0);
+const WINDOW_SIZE: Size = Size::new(640.0, 680.0);
+
+/// The width of a hotkey recorder.
+const RECORDER_WIDTH: f32 = 220.0;
+
+/// The line under the recorder while it records.
+const RECORDING_HINT: &str = "Press the new key combination, or Escape to cancel";
 
 /// The width of the labels down the left of the settings window.
 const LABEL_WIDTH: f32 = 150.0;
@@ -139,6 +162,13 @@ pub enum Message {
     /// Open the settings window, or bring it to the front (the status item's
     /// Settings item).
     Open,
+    /// A hotkey recorder was clicked: record a new hotkey for the mode, or
+    /// stop recording if it was.
+    Record(CaptureMode),
+    /// Input to a window while a hotkey is being recorded.
+    Recorder(window::Id, RecorderInput),
+    /// A hotkey's Default button.
+    DefaultHotkey(CaptureMode),
     /// The folder field was edited.
     SaveDirectory(String),
     /// The folder's Default button.
@@ -172,6 +202,15 @@ impl fmt::Debug for Edit {
     }
 }
 
+/// What the hotkey recorder hears from a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecorderInput {
+    /// A key was pressed with these modifiers held.
+    Key(Physical, keyboard::Modifiers),
+    /// The window lost focus.
+    Unfocused,
+}
+
 /// The open settings window: what its text fields hold.
 #[derive(Debug)]
 struct SettingsWindow {
@@ -184,6 +223,10 @@ struct SettingsWindow {
     previewed: NaiveDateTime,
     /// The default save directory, shown in the empty folder field.
     default_directory: String,
+    /// The capture mode whose hotkey is being recorded.
+    recording: Option<CaptureMode>,
+    /// Why the last hotkey given to a mode was not taken.
+    rejected: Option<(CaptureMode, String)>,
 }
 
 impl SettingsWindow {
@@ -196,6 +239,8 @@ impl SettingsWindow {
             default_directory: default_save_directory()
                 .map(|directory| directory.display().to_string())
                 .unwrap_or_default(),
+            recording: None,
+            rejected: None,
         };
         shown.show(config);
         shown
@@ -382,6 +427,12 @@ pub fn boot(app: &mut App) -> Task<AppMessage> {
 pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
     match message {
         Message::Open => open(app),
+        Message::Record(mode) => record(app, mode),
+        Message::Recorder(window, input) => recorder_input(app, window, input),
+        Message::DefaultHotkey(mode) => {
+            stop_recording(app);
+            set_hotkey(app, mode, Hotkeys::default().get(mode))
+        }
         Message::SaveDirectory(text) => {
             let Some(shown) = &mut app.settings.window else {
                 return Task::none();
@@ -429,11 +480,34 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
 }
 
 pub fn subscription(app: &App) -> Subscription<AppMessage> {
-    match &app.settings.file {
+    let watcher = match &app.settings.file {
         Some(file) => Subscription::run_with(file.clone(), watch)
             .map(|()| AppMessage::Settings(Message::FileChanged)),
         None => Subscription::none(),
-    }
+    };
+    let recording = app
+        .settings
+        .window
+        .as_ref()
+        .is_some_and(|shown| shown.recording.is_some());
+    let recorder = if recording {
+        event::listen_with(|event, _status, window| {
+            let input = match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    physical_key,
+                    modifiers,
+                    repeat: false,
+                    ..
+                }) => RecorderInput::Key(physical_key, modifiers),
+                iced::Event::Window(window::Event::Unfocused) => RecorderInput::Unfocused,
+                _ => return None,
+            };
+            Some(AppMessage::Settings(Message::Recorder(window, input)))
+        })
+    } else {
+        Subscription::none()
+    };
+    Subscription::batch([watcher, recorder])
 }
 
 pub fn view(app: &App, window: window::Id) -> Element<'_, AppMessage> {
@@ -446,6 +520,8 @@ pub fn view(app: &App, window: window::Id) -> Element<'_, AppMessage> {
         return space().into();
     };
     let config = &app.config;
+    let hotkeys =
+        CaptureMode::ALL.map(|mode| setting(mode.to_string(), hotkey_control(app, shown, mode)));
     let after_capture = column(AfterCapture::ALL.map(|after| {
         radio(
             after.to_string(),
@@ -485,6 +561,7 @@ pub fn view(app: &App, window: window::Id) -> Element<'_, AppMessage> {
     .spacing(4);
 
     let mut content = column![
+        section("Hotkeys", hotkeys),
         section("Capturing", [setting("After a capture", after_capture)]),
         section(
             "Saving",
@@ -505,6 +582,7 @@ pub fn window_closed(app: &mut App, window: window::Id) -> Task<AppMessage> {
         .as_ref()
         .is_some_and(|shown| shown.id == window)
     {
+        stop_recording(app);
         app.settings.window = None;
     }
     Task::none()
@@ -605,7 +683,13 @@ fn adopt(app: &mut App, mut settings: Settings) -> Task<AppMessage> {
     if let Some(shown) = &mut app.settings.window {
         shown.show(&app.config);
     }
-    if hotkeys_changed {
+    let recording = app
+        .settings
+        .window
+        .as_ref()
+        .is_some_and(|shown| shown.recording.is_some());
+    // While recording, the hotkeys are registered once it ends.
+    if hotkeys_changed && !recording {
         hotkeys::reregister(app, hotkeys::bindings(&app.config.hotkeys))
     } else {
         Task::none()
@@ -622,6 +706,152 @@ fn report_once(app: &mut App, title: &str, error: &Error) -> Task<AppMessage> {
     }
     app.settings.problem = Some(problem);
     alert::report_error(app, Notice::from_error(title, error))
+}
+
+/// A hotkey recorder was clicked.
+fn record(app: &mut App, mode: CaptureMode) -> Task<AppMessage> {
+    let Some(shown) = &mut app.settings.window else {
+        return Task::none();
+    };
+    shown.rejected = None;
+    if shown.recording == Some(mode) {
+        stop_recording(app);
+    } else if shown.recording.replace(mode).is_none() {
+        // Registered hotkeys never reach the window: free them to be typed.
+        hotkeys::suspend(app);
+    }
+    Task::none()
+}
+
+/// Stops recording, if it was, and registers the hotkeys again.
+fn stop_recording(app: &mut App) {
+    let Some(shown) = &mut app.settings.window else {
+        return;
+    };
+    shown.rejected = None;
+    if shown.recording.take().is_some() {
+        register_quietly(app);
+    }
+}
+
+/// Registers the hotkeys from the settings. Failures show under the
+/// recorders ([`hotkey_note`]) rather than in an alert.
+fn register_quietly(app: &mut App) {
+    let _shown_in_the_window = hotkeys::replace(app, &hotkeys::bindings(&app.config.hotkeys));
+}
+
+/// Handles `input` from `window` while a hotkey is being recorded.
+fn recorder_input(app: &mut App, window: window::Id, input: RecorderInput) -> Task<AppMessage> {
+    let Some(shown) = &mut app.settings.window else {
+        return Task::none();
+    };
+    let Some(mode) = shown.recording.filter(|_| shown.id == window) else {
+        return Task::none();
+    };
+    let RecorderInput::Key(key, modifiers) = input else {
+        stop_recording(app);
+        return Task::none();
+    };
+    let rejected = match recorder::recorded(key, modifiers) {
+        Recorded::Hotkey(hotkey) => return set_hotkey(app, mode, hotkey),
+        Recorded::Cancel => {
+            stop_recording(app);
+            return Task::none();
+        }
+        Recorded::Modifier => return Task::none(),
+        Recorded::NeedsModifier => recorder::NEEDS_MODIFIER,
+        Recorded::Unsupported => recorder::UNSUPPORTED,
+    };
+    shown.rejected = Some((mode, rejected.to_owned()));
+    Task::none()
+}
+
+/// Makes `hotkey` the hotkey of `mode`, unless another mode has it. Taken, it
+/// is saved, recording ends, and the hotkeys are registered again.
+fn set_hotkey(app: &mut App, mode: CaptureMode, hotkey: Hotkey) -> Task<AppMessage> {
+    let mut hotkeys = app.config.hotkeys;
+    let taken = hotkeys.set(mode, hotkey);
+    let Some(shown) = &mut app.settings.window else {
+        return Task::none();
+    };
+    if let Err(duplicate) = taken {
+        let [other, _] = duplicate.modes;
+        shown.rejected = Some((
+            mode,
+            format!(
+                "{} is already the hotkey to {}",
+                recorder::label(hotkey),
+                other.to_string().to_lowercase()
+            ),
+        ));
+        return Task::none();
+    }
+    shown.rejected = None;
+    shown.recording = None;
+    tracing::info!(%hotkey, "new hotkey: {mode}");
+    let saved = change(app, move |config| {
+        // A file edited by hand meanwhile to give it to another mode wins.
+        if let Err(duplicate) = config.hotkeys.set(mode, hotkey) {
+            tracing::warn!("keeping the settings file's hotkeys: {duplicate}");
+        }
+    });
+    register_quietly(app);
+    saved
+}
+
+/// A mode's hotkey recorder, Default button, and the line under them.
+fn hotkey_control<'a>(
+    app: &'a App,
+    shown: &'a SettingsWindow,
+    mode: CaptureMode,
+) -> Element<'a, AppMessage> {
+    let hotkey = app.config.hotkeys.get(mode);
+    let recording = shown.recording == Some(mode);
+    let recorder = button(
+        text(if recording {
+            "Type the new hotkey…".to_owned()
+        } else {
+            recorder::label(hotkey)
+        })
+        .width(Length::Fill)
+        .align_x(iced::alignment::Horizontal::Center),
+    )
+    .width(RECORDER_WIDTH)
+    .style(if recording {
+        button::primary
+    } else {
+        button::secondary
+    })
+    .on_press(AppMessage::Settings(Message::Record(mode)));
+    let default = default_button(
+        hotkey != Hotkeys::default().get(mode),
+        Message::DefaultHotkey(mode),
+    );
+    let mut control = column![row![recorder, default].spacing(8)].spacing(4);
+    if let Some(line) = hotkey_note(app, shown, mode) {
+        control = control.push(note(line));
+    }
+    control.into()
+}
+
+/// The line under `mode`'s hotkey recorder: why the last hotkey given to it
+/// was not taken, what to do while it records, or why its hotkey is not
+/// active.
+fn hotkey_note(app: &App, shown: &SettingsWindow, mode: CaptureMode) -> Option<Note> {
+    if let Some((_, rejected)) = shown.rejected.as_ref().filter(|(m, _)| *m == mode) {
+        return Some(Note::Problem(rejected.clone()));
+    }
+    if shown.recording == Some(mode) {
+        return Some(Note::Hint(RECORDING_HINT.to_owned()));
+    }
+    app.hotkeys.problem(mode).map(|error| {
+        Note::Problem(match error {
+            Error::HotkeyUnavailable { reason, .. } => {
+                format!("Not active: {reason}")
+            }
+            other => alert::capitalize(&other.to_string()),
+        })
+    })
 }
 
 /// A line under a control.
@@ -667,7 +897,7 @@ fn section<'a>(
 
 /// One setting: its label on the left, its control on the right.
 fn setting<'a>(
-    label: &'a str,
+    label: impl text::IntoFragment<'a>,
     control: impl Into<Element<'a, AppMessage>>,
 ) -> Element<'a, AppMessage> {
     row![
@@ -698,14 +928,14 @@ fn note<'a>(note: Note) -> Element<'a, AppMessage> {
 mod tests {
     use std::sync::mpsc as std_mpsc;
 
-    use chartreuse_core::capture::CaptureMode;
-    use chartreuse_core::hotkey::Hotkey;
     use chartreuse_platform::fake::Fake;
     use chartreuse_platform::MenuAction;
     use chrono::NaiveDate;
     use futures::executor::block_on;
     use futures::StreamExt;
     use iced::advanced::subscription::into_recipes;
+    use iced::keyboard::key::Code;
+    use iced::keyboard::Modifiers as Held;
     use iced_runtime::Action;
     use tempfile::TempDir;
 
@@ -1051,6 +1281,239 @@ mod tests {
         assert_eq!(app.config.file_name.as_str(), "Edited {date}");
         assert_eq!(shown(&app).file_name.text, "Edited {date}");
         assert_eq!(shown(&app).file_name.error, None);
+    }
+
+    /// Presses `code` with `held` in the settings window.
+    fn press(app: &mut App, code: Code, held: Held) {
+        let window = shown(app).id;
+        send(
+            app,
+            Message::Recorder(window, RecorderInput::Key(Physical::Code(code), held)),
+        );
+    }
+
+    fn hotkey_line(app: &App, mode: CaptureMode) -> Option<Note> {
+        hotkey_note(app, shown(app), mode)
+    }
+
+    fn recording(app: &App) -> Option<CaptureMode> {
+        shown(app).recording
+    }
+
+    /// The default hotkeys, as registered.
+    fn defaults() -> Vec<chartreuse_platform::HotkeyBinding> {
+        hotkeys::bindings(&Hotkeys::default())
+    }
+
+    #[test]
+    fn a_recorded_hotkey_is_saved_and_registered_and_none_are_while_recording() {
+        let (mut app, fake, _temp) = app_with_file();
+        send(&mut app, Message::Open);
+
+        send(&mut app, Message::Record(CaptureMode::Display));
+        assert!(fake.registered_hotkeys().is_empty(), "free to be typed");
+        assert_eq!(
+            hotkey_line(&app, CaptureMode::Display),
+            Some(Note::Hint(RECORDING_HINT.into()))
+        );
+
+        // A modifier on its own, then a key with no modifier: not a hotkey.
+        press(&mut app, Code::ShiftLeft, Held::SHIFT);
+        press(&mut app, Code::KeyK, Held::empty());
+        assert_eq!(recording(&app), Some(CaptureMode::Display));
+        assert_eq!(
+            hotkey_line(&app, CaptureMode::Display),
+            Some(Note::Problem(recorder::NEEDS_MODIFIER.into()))
+        );
+
+        press(&mut app, Code::KeyK, Held::LOGO | Held::SHIFT);
+        let recorded = hotkey("Shift+Super+K");
+        assert_eq!(app.config.hotkeys.get(CaptureMode::Display), recorded);
+        assert_eq!(recording(&app), None);
+        assert_eq!(hotkey_line(&app, CaptureMode::Display), None);
+        assert_eq!(
+            fake.registered_hotkeys(),
+            hotkeys::bindings(&app.config.hotkeys)
+        );
+        assert!(fake.press_hotkey(recorded));
+        assert_eq!(on_disk(&app).hotkeys, app.config.hotkeys);
+        assert_eq!(alerts(&app), 0);
+    }
+
+    #[test]
+    fn escape_leaving_the_window_or_closing_it_cancels_recording() {
+        let (mut app, fake, _temp) = app_with_file();
+        send(&mut app, Message::Open);
+        let settings = shown(&app).id;
+        let (elsewhere, _) = app
+            .windows
+            .open(WindowKind::Editor, window::Settings::default());
+
+        send(&mut app, Message::Record(CaptureMode::Window));
+        send(
+            &mut app,
+            Message::Recorder(
+                elsewhere,
+                RecorderInput::Key(Physical::Code(Code::KeyK), Held::LOGO),
+            ),
+        );
+        assert_eq!(recording(&app), Some(CaptureMode::Window), "not our window");
+        press(&mut app, Code::Escape, Held::empty());
+        assert_eq!(recording(&app), None);
+        assert_eq!(fake.registered_hotkeys(), defaults());
+
+        send(&mut app, Message::Record(CaptureMode::Window));
+        send(
+            &mut app,
+            Message::Recorder(settings, RecorderInput::Unfocused),
+        );
+        assert_eq!(recording(&app), None);
+        assert_eq!(fake.registered_hotkeys(), defaults());
+
+        send(&mut app, Message::Record(CaptureMode::Window));
+        send(&mut app, Message::Record(CaptureMode::Window));
+        assert_eq!(recording(&app), None, "clicked again");
+        assert_eq!(fake.registered_hotkeys(), defaults());
+
+        send(&mut app, Message::Record(CaptureMode::Window));
+        let _ = app.settle(AppMessage::WindowClosed(settings));
+        assert_eq!(fake.registered_hotkeys(), defaults());
+        assert_eq!(app.config.hotkeys, Hotkeys::default());
+    }
+
+    #[test]
+    fn a_hotkey_another_mode_has_is_rejected_and_recording_goes_on() {
+        let (mut app, fake, _temp) = app_with_file();
+        send(&mut app, Message::Open);
+
+        send(&mut app, Message::Record(CaptureMode::Window));
+        press(&mut app, Code::Digit3, Held::CTRL | Held::ALT | Held::SHIFT);
+
+        assert_eq!(app.config.hotkeys, Hotkeys::default());
+        assert_eq!(recording(&app), Some(CaptureMode::Window));
+        let line = hotkey_line(&app, CaptureMode::Window);
+        assert!(
+            matches!(&line, Some(Note::Problem(problem))
+                if problem.ends_with("is already the hotkey to capture display")),
+            "{line:?}"
+        );
+        assert!(!file(&app).path.exists(), "nothing saved");
+
+        press(&mut app, Code::Escape, Held::empty());
+        assert_eq!(hotkey_line(&app, CaptureMode::Window), None, "cancelled");
+        assert_eq!(fake.registered_hotkeys(), defaults());
+    }
+
+    #[test]
+    fn a_hotkey_another_program_holds_is_kept_but_shown_as_not_active() {
+        let (mut app, fake, _temp) = app_with_file();
+        let held_elsewhere = hotkey("Super+F5");
+        fake.reserve_hotkey(held_elsewhere);
+        send(&mut app, Message::Open);
+
+        send(&mut app, Message::Record(CaptureMode::Rectangle));
+        press(&mut app, Code::F5, Held::LOGO);
+
+        assert_eq!(
+            app.config.hotkeys.get(CaptureMode::Rectangle),
+            held_elsewhere
+        );
+        assert_eq!(on_disk(&app).hotkeys, app.config.hotkeys);
+        assert_eq!(
+            hotkey_line(&app, CaptureMode::Rectangle),
+            Some(Note::Problem(
+                "Not active: another program has registered it".into()
+            ))
+        );
+        assert_eq!(hotkey_line(&app, CaptureMode::Display), None);
+        assert_eq!(alerts(&app), 0, "shown in the window instead");
+        let active: Vec<CaptureMode> = fake
+            .registered_hotkeys()
+            .iter()
+            .map(|binding| binding.mode)
+            .collect();
+        assert_eq!(active, [CaptureMode::Display, CaptureMode::Window]);
+    }
+
+    #[test]
+    fn default_puts_back_the_default_hotkey_unless_another_mode_took_it() {
+        let (mut app, fake, _temp) = app_with_file();
+        send(&mut app, Message::Open);
+        send(&mut app, Message::Record(CaptureMode::Display));
+        press(&mut app, Code::KeyK, Held::LOGO);
+
+        send(&mut app, Message::DefaultHotkey(CaptureMode::Display));
+        assert_eq!(app.config.hotkeys, Hotkeys::default());
+        assert_eq!(fake.registered_hotkeys(), defaults());
+        assert_eq!(on_disk(&app).hotkeys, Hotkeys::default());
+
+        // Display's default, given to Window while Display had another.
+        send(&mut app, Message::Record(CaptureMode::Display));
+        press(&mut app, Code::KeyK, Held::LOGO);
+        send(&mut app, Message::Record(CaptureMode::Window));
+        press(&mut app, Code::Digit3, Held::CTRL | Held::ALT | Held::SHIFT);
+        send(&mut app, Message::DefaultHotkey(CaptureMode::Display));
+        assert_eq!(
+            app.config.hotkeys.get(CaptureMode::Display),
+            hotkey("Super+K")
+        );
+        let line = hotkey_line(&app, CaptureMode::Display);
+        assert!(
+            matches!(&line, Some(Note::Problem(problem))
+                if problem.ends_with("is already the hotkey to capture window")),
+            "{line:?}"
+        );
+    }
+
+    #[test]
+    fn hotkeys_edited_by_hand_during_recording_are_registered_when_it_ends() {
+        let (mut app, fake, _temp) = app_with_file();
+        send(&mut app, Message::Open);
+        send(&mut app, Message::Record(CaptureMode::Display));
+
+        edit(&mut app, "[hotkeys]\nwindow = \"Super+F2\"\n");
+        assert!(fake.registered_hotkeys().is_empty(), "still recording");
+
+        press(&mut app, Code::Escape, Held::empty());
+        assert_eq!(
+            fake.registered_hotkeys(),
+            hotkeys::bindings(&app.config.hotkeys)
+        );
+        assert!(fake.press_hotkey(hotkey("Super+F2")));
+    }
+
+    #[test]
+    fn a_recorded_hotkey_keeps_the_hotkeys_edited_by_hand_meanwhile() {
+        let (mut app, fake, _temp) = app_with_file();
+        send(&mut app, Message::Open);
+        let path = file(&app).path.clone();
+
+        send(&mut app, Message::Record(CaptureMode::Display));
+        fs::write(
+            &path,
+            "[hotkeys]\nwindow = \"Super+F2\"\nrectangle = \"Super+K\"\n",
+        )
+        .unwrap();
+        press(&mut app, Code::KeyJ, Held::LOGO);
+        let saved = on_disk(&app).hotkeys;
+        assert_eq!(saved.get(CaptureMode::Display), hotkey("Super+J"));
+        assert_eq!(saved.get(CaptureMode::Window), hotkey("Super+F2"));
+        assert_eq!(app.config.hotkeys, saved);
+        assert_eq!(fake.registered_hotkeys(), hotkeys::bindings(&saved));
+
+        // Given meanwhile to the mode another is recorded with: the file wins.
+        send(&mut app, Message::Record(CaptureMode::Window));
+        fs::write(
+            &path,
+            "[hotkeys]\ndisplay = \"Super+J\"\nwindow = \"Super+F2\"\nrectangle = \"Super+L\"\n",
+        )
+        .unwrap();
+        press(&mut app, Code::KeyL, Held::LOGO);
+        let saved = on_disk(&app).hotkeys;
+        assert_eq!(saved.get(CaptureMode::Window), hotkey("Super+F2"));
+        assert_eq!(saved.get(CaptureMode::Rectangle), hotkey("Super+L"));
+        assert_eq!(app.config.hotkeys, saved);
+        assert_eq!(fake.registered_hotkeys(), hotkeys::bindings(&saved));
     }
 
     #[test]
