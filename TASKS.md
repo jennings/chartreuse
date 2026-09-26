@@ -292,10 +292,10 @@ Depends on: 1G. Owns: `chartreuse-editor::{canvas,tools}`, the editor window vie
 
 Depends on: 1E, 1G. Owns: `chartreuse-editor::flatten`
 
-- [ ] Render annotations to pixels so the result matches the canvas; choose the
+- [x] Render annotations to pixels so the result matches the canvas; choose the
       rasterizer here
-- [ ] Rasterize text with the same fonts and shaping the canvas uses
-- [ ] Golden-image tests for each annotation type
+- [x] Rasterize text with the same fonts and shaping the canvas uses
+- [x] Golden-image tests for each annotation type
 
 ### 2G — Window enumeration and capture (macOS)
 
