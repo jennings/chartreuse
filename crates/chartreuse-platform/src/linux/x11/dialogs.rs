@@ -1,13 +1,13 @@
-//! X11: open and save dialogs. Implemented by track 4B.
-//!
-//! Until then every call fails with [`Error::Unsupported`].
+//! X11: open and save dialogs, through the FileChooser portal shared with
+//! the Wayland backend (see [`crate::linux::file_chooser`]).
 
 use std::path::PathBuf;
 
-use chartreuse_core::{Error, Result};
-use futures::future::{self, BoxFuture, FutureExt};
+use chartreuse_core::Result;
+use futures::future::BoxFuture;
 
 use crate::dialogs::{FileDialogs, OpenImageRequest, SaveImageRequest};
+use crate::linux::file_chooser;
 
 /// The X11 [`FileDialogs`] backend.
 #[derive(Debug, Default)]
@@ -20,17 +20,11 @@ impl X11FileDialogs {
 }
 
 impl FileDialogs for X11FileDialogs {
-    fn open_image(
-        &self,
-        _request: OpenImageRequest,
-    ) -> BoxFuture<'static, Result<Option<PathBuf>>> {
-        future::ready(Err(Error::Unsupported("the file dialog"))).boxed()
+    fn open_image(&self, request: OpenImageRequest) -> BoxFuture<'static, Result<Option<PathBuf>>> {
+        file_chooser::open_image(request)
     }
 
-    fn save_image(
-        &self,
-        _request: SaveImageRequest,
-    ) -> BoxFuture<'static, Result<Option<PathBuf>>> {
-        future::ready(Err(Error::Unsupported("the file dialog"))).boxed()
+    fn save_image(&self, request: SaveImageRequest) -> BoxFuture<'static, Result<Option<PathBuf>>> {
+        file_chooser::save_image(request)
     }
 }

@@ -66,9 +66,15 @@ windows = { version = "0.62.2", features = [
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # Decoding the tray icons.
 chartreuse-imaging.workspace = true
-# The StatusNotifierItem tray, over zbus. `async-io` shares the zbus runtime
-# iced's Linux theme detection already pulls in instead of adding tokio;
-# `blocking` runs the service on its own thread.
+# XDG desktop portals (FileChooser), over zbus. `async-io` runs zbus on the
+# async-io runtime iced's Linux theme detection already pulls in, instead of
+# adding tokio.
+ashpd = { version = "0.13.13", default-features = false, features = [
+    "async-io",
+    "file_chooser",
+] }
+# The StatusNotifierItem tray, over the same zbus runtime; `blocking` runs its
+# service on its own thread.
 ksni = { version = "0.3.6", default-features = false, features = [
     "async-io",
     "blocking",
