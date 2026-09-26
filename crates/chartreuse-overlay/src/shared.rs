@@ -6,7 +6,8 @@
 use chartreuse_core::display::DisplayInfo;
 use chartreuse_core::geometry::{LogicalPoint, LogicalRect, LogicalSize};
 use chartreuse_core::image::Image;
-use iced::advanced::text::Alignment;
+use iced::advanced::graphics::text::Paragraph;
+use iced::advanced::text::{Alignment, Paragraph as _, Text, Wrapping};
 use iced::alignment::Vertical;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::image::Handle;
@@ -191,6 +192,38 @@ pub(crate) fn border_around(frame: &mut Frame, hole: Rectangle, color: Color) {
         hole.size().expand(Size::new(BORDER_WIDTH, BORDER_WIDTH)),
         Stroke::default().with_color(color).with_width(BORDER_WIDTH),
     );
+}
+
+/// Strokes a [`BORDER_WIDTH`] border in `color` just inside `rect`, so it stays
+/// visible when `rect` fills the canvas.
+pub(crate) fn border_within(frame: &mut Frame, rect: Rectangle, color: Color) {
+    let inset = BORDER_WIDTH / 2.0;
+    frame.stroke_rectangle(
+        rect.position() + Vector::new(inset, inset),
+        Size::new(
+            (rect.width - BORDER_WIDTH).max(0.0),
+            (rect.height - BORDER_WIDTH).max(0.0),
+        ),
+        Stroke::default().with_color(color).with_width(BORDER_WIDTH),
+    );
+}
+
+/// The size of `content` set as a label's text (on one line), measured with the
+/// same font and shaping [`draw_pill`] draws it with.
+pub(crate) fn measure_label(content: &str) -> Size {
+    let style = canvas::Text::default();
+    Paragraph::with_text(Text {
+        content,
+        bounds: Size::INFINITE,
+        size: LABEL_TEXT_SIZE.into(),
+        line_height: style.line_height,
+        font: style.font,
+        align_x: Alignment::Center,
+        align_y: Vertical::Center,
+        shaping: style.shaping,
+        wrapping: Wrapping::None,
+    })
+    .min_bounds()
 }
 
 /// The size of the pill holding a label whose text measures `text`.
