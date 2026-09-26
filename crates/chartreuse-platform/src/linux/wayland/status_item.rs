@@ -1,9 +1,9 @@
-//! Wayland: the status item. Implemented by track 4B.
-//!
-//! Until then every call fails with [`Error::Unsupported`].
+//! Wayland: the status item, a StatusNotifierItem tray icon shared with the
+//! X11 backend (see [`crate::linux::tray`]).
 
-use chartreuse_core::{Error, Result};
+use chartreuse_core::Result;
 
+use crate::linux::tray;
 use crate::status_item::{StatusItem, StatusItemHandle};
 
 /// The Wayland [`StatusItem`] backend.
@@ -18,6 +18,6 @@ impl WaylandStatusItem {
 
 impl StatusItem for WaylandStatusItem {
     fn install(&self) -> Result<StatusItemHandle> {
-        Err(Error::Unsupported("the status item"))
+        tray::install()
     }
 }

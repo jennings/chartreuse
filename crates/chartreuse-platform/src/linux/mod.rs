@@ -8,6 +8,8 @@
 #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 mod logic;
 #[cfg(all(unix, not(target_os = "macos")))]
+mod tray;
+#[cfg(all(unix, not(target_os = "macos")))]
 mod wayland;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11;

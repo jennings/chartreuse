@@ -1,9 +1,9 @@
-//! X11: the status item. Implemented by track 4B.
-//!
-//! Until then every call fails with [`Error::Unsupported`].
+//! X11: the status item, a StatusNotifierItem tray icon shared with the
+//! Wayland backend (see [`crate::linux::tray`]).
 
-use chartreuse_core::{Error, Result};
+use chartreuse_core::Result;
 
+use crate::linux::tray;
 use crate::status_item::{StatusItem, StatusItemHandle};
 
 /// The X11 [`StatusItem`] backend.
@@ -18,6 +18,6 @@ impl X11StatusItem {
 
 impl StatusItem for X11StatusItem {
     fn install(&self) -> Result<StatusItemHandle> {
-        Err(Error::Unsupported("the status item"))
+        tray::install()
     }
 }

@@ -61,6 +61,19 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Linux and other free Unix desktops. Everything here is pure Rust or loads its
+# system library at run time, so building needs no `-dev` packages.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# Decoding the tray icons.
+chartreuse-imaging.workspace = true
+# The StatusNotifierItem tray, over zbus. `async-io` shares the zbus runtime
+# iced's Linux theme detection already pulls in instead of adding tokio;
+# `blocking` runs the service on its own thread.
+ksni = { version = "0.3.6", default-features = false, features = [
+    "async-io",
+    "blocking",
+] }
+
 [dev-dependencies]
 chartreuse-imaging.workspace = true
 
