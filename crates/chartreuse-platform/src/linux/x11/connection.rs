@@ -11,12 +11,25 @@ use std::sync::OnceLock;
 
 use chartreuse_core::{Error, Result};
 use x11rb::connection::Connection as _;
-use x11rb::protocol::xproto::{self, Atom, ConnectionExt as _, Screen, Window};
+use x11rb::protocol::xproto::{self, Atom, AtomEnum, ConnectionExt as _, Screen, Window};
 use x11rb::rust_connection::RustConnection;
 
 x11rb::atom_manager! {
     /// The atoms the backends use.
     pub Atoms: AtomsCookie {
+        UTF8_STRING,
+        _GTK_FRAME_EXTENTS,
+        _NET_CLIENT_LIST,
+        _NET_CLIENT_LIST_STACKING,
+        _NET_CURRENT_DESKTOP,
+        _NET_WM_DESKTOP,
+        _NET_WM_NAME,
+        _NET_WM_PID,
+        _NET_WM_STATE,
+        _NET_WM_STATE_HIDDEN,
+        _NET_WM_WINDOW_TYPE,
+        _NET_WM_WINDOW_TYPE_DESKTOP,
+        _NET_WM_WINDOW_TYPE_DOCK,
         _XSETTINGS_SETTINGS,
     }
 }
@@ -76,6 +89,17 @@ impl X11 {
             .atom)
     }
 
+    /// The 32-bit values of `window`'s `property` of `kind`; empty if unset.
+    pub fn property32(
+        &self,
+        window: Window,
+        property: Atom,
+        kind: impl Into<Atom>,
+    ) -> Result<Vec<u32>> {
+        let reply = self.property(window, property, kind.into())?;
+        Ok(reply.value32().map(Iterator::collect).unwrap_or_default())
+    }
+
     /// The bytes of `window`'s `property` of `kind`; empty if unset.
     pub fn property8(
         &self,
@@ -103,6 +127,16 @@ impl X11 {
             .map_err(|e| failed(what, e))?
             .reply()
             .map_err(|e| failed(what, e))
+    }
+
+    /// The window's title: `_NET_WM_NAME` (UTF-8), else `WM_NAME` (Latin-1).
+    pub fn title(&self, window: Window) -> Result<Option<String>> {
+        let name = self.property8(window, self.atoms._NET_WM_NAME, self.atoms.UTF8_STRING)?;
+        if !name.is_empty() {
+            return Ok(Some(String::from_utf8_lossy(&name).into_owned()));
+        }
+        let name = self.property8(window, AtomEnum::WM_NAME.into(), AtomEnum::STRING)?;
+        Ok((!name.is_empty()).then(|| name.iter().copied().map(char::from).collect()))
     }
 }
 

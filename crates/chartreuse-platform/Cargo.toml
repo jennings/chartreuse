@@ -82,7 +82,13 @@ ksni = { version = "0.3.6", default-features = false, features = [
 # Maps the MIT-SHM segments the X server shares for ShmGetImage.
 memmap2 = "0.9.11"
 # The pure-Rust X11 connection, with the extensions the X11 backend uses.
-x11rb = { version = "0.13.2", features = ["randr", "resource_manager", "shm", "xkb"] }
+x11rb = { version = "0.13.2", features = [
+    "composite",
+    "randr",
+    "resource_manager",
+    "shm",
+    "xkb",
+] }
 
 [dev-dependencies]
 chartreuse-imaging.workspace = true
