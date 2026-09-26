@@ -1,10 +1,17 @@
-//! The clipboard of both Linux backends, through `arboard`.
+//! The clipboard of both Linux backends, through `arboard`, which exchanges
+//! images as `image/png`.
 //!
-//! On X11 that is the `CLIPBOARD` selection: arboard serves copied images as
-//! `image/png` from a background thread for as long as the clipboard handle
-//! lives (Chartreuse keeps it for the whole run) and hands them to the
-//! desktop's clipboard manager, if one runs, when it is dropped. Pasting
-//! converts the selection owner's `image/png` into pixels.
+//! - X11: the `CLIPBOARD` selection. arboard serves copied images from a
+//!   background thread for as long as the clipboard handle lives (Chartreuse
+//!   keeps it for the whole run) and hands them to the desktop's clipboard
+//!   manager, if one runs, when it is dropped.
+//! - Wayland (`WAYLAND_DISPLAY` set): the core `wl_data_device` clipboard
+//!   needs keyboard focus and an input serial, which only the focused window's
+//!   own connection (winit's) has. So arboard uses the data-control protocols
+//!   (`ext-data-control`, `wlr-data-control`: KDE, wlroots compositors),
+//!   which work without focus, and falls back to the X11 selection through
+//!   XWayland where the compositor has neither (GNOME), which Mutter keeps in
+//!   sync with the Wayland clipboard.
 
 use std::borrow::Cow;
 

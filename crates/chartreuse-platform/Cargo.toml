@@ -67,9 +67,12 @@ windows = { version = "0.62.2", features = [
 # Decoding the tray icons and portal screenshots, and resampling screenshots
 # onto displays.
 chartreuse-imaging.workspace = true
-# The clipboard: X11 selections served from a thread over x11rb, images
-# exchanged as PNG.
-arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
+# The clipboard: X11 selections served from a thread over x11rb, and the
+# Wayland data-control protocols (wl-clipboard-rs); images exchanged as PNG.
+arboard = { version = "3.6.1", default-features = false, features = [
+    "image-data",
+    "wayland-data-control",
+] }
 # XDG desktop portals (FileChooser, Screenshot, GlobalShortcuts), over zbus.
 # `async-io` runs zbus on the async-io runtime iced's Linux theme detection
 # already pulls in, instead of adding tokio.
