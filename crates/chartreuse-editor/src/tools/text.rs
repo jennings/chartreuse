@@ -4,8 +4,9 @@ use iced::mouse::Interaction;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{Context, Pointer, Preview, Tool, ToolKind};
+use crate::font;
 use crate::model::{
-    AnnotationId, Command, Document, Point, Shape, Style, StylePatch, Text, Vector,
+    AnnotationId, Command, Document, Point, Shape, Size, Style, StylePatch, Text, Vector,
 };
 
 /// A change to the text being edited.
@@ -36,6 +37,10 @@ pub struct TextEdit {
     position: Point,
     content: String,
     style: Style,
+    /// The content's layout, kept up to date so drawing needs none: its size
+    /// and where the caret goes.
+    size: Size,
+    caret: Vector,
 }
 
 impl TextEdit {
@@ -43,12 +48,12 @@ impl TextEdit {
     #[must_use]
     pub fn new(at: Point, style: Style) -> Self {
         let half_line = style.font_size.max(0.0) * Text::LINE_HEIGHT / 2.0;
-        Self {
-            target: TextTarget::New,
-            position: at - Vector::new(0.0, half_line),
-            content: String::new(),
+        Self::laid_out(
+            TextTarget::New,
+            at - Vector::new(0.0, half_line),
+            String::new(),
             style,
-        }
+        )
     }
 
     /// An edit of the text annotation `id`, or `None` if `id` is not one.
@@ -58,12 +63,31 @@ impl TextEdit {
         let Shape::Text(text) = &annotation.shape else {
             return None;
         };
-        Some(Self {
-            target: TextTarget::Existing(id),
-            position: text.position,
-            content: text.content.clone(),
-            style: annotation.style,
-        })
+        Some(Self::laid_out(
+            TextTarget::Existing(id),
+            text.position,
+            text.content.clone(),
+            annotation.style,
+        ))
+    }
+
+    fn laid_out(target: TextTarget, position: Point, content: String, style: Style) -> Self {
+        let mut edit = Self {
+            target,
+            position,
+            content,
+            style,
+            size: Size::default(),
+            caret: Vector::default(),
+        };
+        edit.lay_out();
+        edit
+    }
+
+    /// Updates the layout after the content or the font size changed.
+    fn lay_out(&mut self) {
+        self.size = font::measure(&self.content, self.style.font_size);
+        self.caret = font::caret(&self.content, self.style.font_size);
     }
 
     #[must_use]
@@ -88,6 +112,19 @@ impl TextEdit {
         self.style
     }
 
+    /// The content's laid-out size (see [`font::measure`]).
+    #[must_use]
+    pub const fn size(&self) -> Size {
+        self.size
+    }
+
+    /// Where the caret goes, relative to [`position`](Self::position) (see
+    /// [`font::caret`]).
+    #[must_use]
+    pub const fn caret(&self) -> Vector {
+        self.caret
+    }
+
     /// Whether the text is empty or only whitespace, and so would be
     /// discarded.
     #[must_use]
@@ -107,12 +144,17 @@ impl TextEdit {
             }
             TextInput::Newline => self.content.push('\n'),
         }
+        self.lay_out();
     }
 
     /// Changes the style the text is shown in. (For an existing annotation
     /// the editor restyles the annotation itself separately.)
     pub fn restyle(&mut self, patch: &StylePatch) {
+        let font_size = self.style.font_size;
         self.style = self.style.patched(patch);
+        if self.style.font_size != font_size {
+            self.lay_out();
+        }
     }
 
     /// Commits the edit to `document` as at most one undo step: new text is
@@ -265,6 +307,31 @@ mod tests {
         assert_eq!(edit.content(), "ae\u{301}");
         edit.input(TextInput::Backspace);
         assert_eq!(edit.content(), "a");
+    }
+
+    #[test]
+    fn the_layout_follows_the_content_and_the_font_size() {
+        let laid_out = |edit: &TextEdit| {
+            let font_size = edit.style().font_size;
+            (
+                font::measure(edit.content(), font_size),
+                font::caret(edit.content(), font_size),
+            )
+        };
+        let mut edit = TextEdit::new(Point::ORIGIN, Style::default());
+        assert_eq!((edit.size(), edit.caret()), laid_out(&edit));
+        typed(
+            &mut edit,
+            [insert("Hi"), TextInput::Newline, insert("there")],
+        );
+        assert_eq!((edit.size(), edit.caret()), laid_out(&edit));
+        let before = edit.size();
+        edit.restyle(&StylePatch {
+            font_size: Some(48.0),
+            ..StylePatch::default()
+        });
+        assert!(edit.size().width > before.width);
+        assert_eq!((edit.size(), edit.caret()), laid_out(&edit));
     }
 
     #[test]

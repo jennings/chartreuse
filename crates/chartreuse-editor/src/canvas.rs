@@ -21,6 +21,11 @@
 //! Annotations and previews are clipped to the image, as they are when
 //! flattened; selection chrome is not.
 //!
+//! The base and annotation layers keep their geometry and redraw only when
+//! what they show changes: the image, the view, the canvas size, the theme,
+//! a run's annotations, or a preview of one of them. A pointer move in a
+//! gesture that changes nothing else redraws only the overlay.
+//!
 //! The zoom and pan are a [`View`], mapped to canvas coordinates by a
 //! [`Viewport`].
 //!
@@ -48,13 +53,17 @@
 //!
 //! [`ArrowHead::base`]: crate::model::ArrowHead::base
 //! [`Rect::corners`]: crate::model::Rect::corners
+//! [`font::FONT`]: crate::font::FONT
+//! [`font::layout`]: crate::font::layout
 
 mod render;
 mod viewport;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::ops::Range;
 
+use iced::advanced::image;
 use iced::advanced::mouse::{self, click, Interaction};
 use iced::widget::canvas::{self as iced_canvas, Action, Event, Frame, Geometry, Program};
 use iced::widget::image::FilterMethod;
@@ -63,7 +72,6 @@ use iced::{keyboard, Color, Element, Length, Point, Rectangle, Renderer, Size, T
 use smol_str::SmolStr;
 
 use crate::editor::Message;
-use crate::font;
 use crate::model::{Annotation, Shape};
 use crate::tools::{self, Preview, TextTarget};
 use crate::Editor;
@@ -178,6 +186,89 @@ struct Tracking {
     last_click: Option<click::Click>,
 }
 
+/// A layer's widget state.
+#[derive(Debug, Default)]
+struct LayerState {
+    /// The overlay's pointer tracking.
+    tracking: Tracking,
+    /// The base or annotation layer's geometry.
+    drawing: Drawing,
+}
+
+/// A layer's geometry, kept while what the layer shows stays the same.
+#[derive(Debug, Default)]
+struct Drawing {
+    cache: iced_canvas::Cache,
+    /// What `cache` holds a drawing of, if anything.
+    of: RefCell<Option<Content<'static>>>,
+}
+
+/// Everything a cached layer's drawing depends on besides the canvas size
+/// (which the cache tracks itself).
+#[derive(Debug, Clone, PartialEq)]
+enum Content<'a> {
+    Base {
+        image: image::Id,
+        viewport: Viewport,
+        backdrop: Color,
+    },
+    Annotations {
+        viewport: Viewport,
+        annotations: Cow<'a, [Annotation]>,
+    },
+}
+
+impl Content<'_> {
+    fn into_owned(self) -> Content<'static> {
+        match self {
+            Content::Base {
+                image,
+                viewport,
+                backdrop,
+            } => Content::Base {
+                image,
+                viewport,
+                backdrop,
+            },
+            Content::Annotations {
+                viewport,
+                annotations,
+            } => Content::Annotations {
+                viewport,
+                annotations: Cow::Owned(annotations.into_owned()),
+            },
+        }
+    }
+}
+
+impl Drawing {
+    /// The layer's geometry at `size`: as drawn last time if that was of the
+    /// same `content` at the same size, otherwise drawn by `draw`. `None`
+    /// content (being previewed) is drawn afresh and not kept.
+    fn draw(
+        &self,
+        renderer: &Renderer,
+        size: Size,
+        content: Option<Content<'_>>,
+        draw: impl FnOnce(&mut Frame),
+    ) -> Geometry {
+        let mut drawn = self.of.borrow_mut();
+        let Some(content) = content else {
+            if drawn.take().is_some() {
+                self.cache.clear();
+            }
+            let mut frame = Frame::new(renderer, size);
+            draw(&mut frame);
+            return frame.into_geometry();
+        };
+        if drawn.as_ref() != Some(&content) {
+            self.cache.clear();
+            *drawn = Some(content.into_owned());
+        }
+        self.cache.draw(renderer, size, draw)
+    }
+}
+
 impl Scene<'_> {
     /// The canvas input for `event`, if the editor cares about it.
     fn input(
@@ -239,12 +330,8 @@ impl Scene<'_> {
         }
     }
 
-    fn draw_base(&self, frame: &mut Frame, theme: &Theme) {
-        let base = theme.extended_palette().background.base.color;
-        let backdrop = Color::from_rgb(base.r * 0.6, base.g * 0.6, base.b * 0.6);
+    fn draw_base(&self, frame: &mut Frame, viewport: &Viewport, backdrop: Color) {
         frame.fill_rectangle(Point::ORIGIN, frame.size(), backdrop);
-
-        let viewport = self.editor.viewport(frame.size());
         let image = iced_canvas::Image::new(self.editor.image().clone()).filter_method(
             if viewport.scale() >= 1.0 {
                 FilterMethod::Nearest
@@ -258,15 +345,18 @@ impl Scene<'_> {
         );
     }
 
-    fn draw_annotations(&self, frame: &mut Frame, range: Range<usize>) {
-        let viewport = self.editor.viewport(frame.size());
+    fn draw_annotations(
+        &self,
+        frame: &mut Frame,
+        viewport: &Viewport,
+        annotations: &[Annotation],
+        preview: &Preview<'_>,
+    ) {
         let clip = viewport.to_canvas_rect(self.editor.document().bounds());
-        let preview = self.editor.active_tool().preview();
-        let annotations = &self.editor.document().annotations()[range];
         frame.with_clip(clip, |frame| {
             for annotation in annotations {
-                if let Some(shape) = displayed(annotation, &preview) {
-                    render::shape(frame, &viewport, &shape, &annotation.style);
+                if let Some(shape) = displayed(annotation, preview) {
+                    render::shape(frame, viewport, &shape, &annotation.style);
                 }
             }
         });
@@ -295,8 +385,8 @@ impl Scene<'_> {
                     frame,
                     &viewport,
                     edit.position(),
-                    font::measure(edit.content(), style.font_size),
-                    font::caret(edit.content(), style.font_size),
+                    edit.size(),
+                    edit.caret(),
                     &style,
                     accent,
                 );
@@ -346,12 +436,26 @@ fn displayed<'a>(annotation: &'a Annotation, preview: &Preview<'a>) -> Option<Co
     }
 }
 
+/// Whether `preview` leaves `annotation` displayed as it is.
+fn unchanged(annotation: &Annotation, preview: &Preview<'_>) -> bool {
+    matches!(
+        displayed(annotation, preview),
+        Some(Cow::Borrowed(shape)) if std::ptr::eq(shape, &annotation.shape)
+    )
+}
+
+/// The canvas's backdrop around the image: the theme's background, darkened.
+fn backdrop(theme: &Theme) -> Color {
+    let base = theme.extended_palette().background.base.color;
+    Color::from_rgb(base.r * 0.6, base.g * 0.6, base.b * 0.6)
+}
+
 impl Program<Message> for Scene<'_> {
-    type State = Tracking;
+    type State = LayerState;
 
     fn update(
         &self,
-        tracking: &mut Tracking,
+        state: &mut LayerState,
         event: &Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -359,7 +463,7 @@ impl Program<Message> for Scene<'_> {
         let Layer::Overlay = self.layer else {
             return None;
         };
-        let kind = self.input(tracking, event, bounds, cursor)?;
+        let kind = self.input(&mut state.tracking, event, bounds, cursor)?;
         let captures = !matches!(kind, InputKind::Resized | InputKind::Modifiers(_));
         let action = Action::publish(Message::Canvas(Input {
             size: bounds.size(),
@@ -374,24 +478,52 @@ impl Program<Message> for Scene<'_> {
 
     fn draw(
         &self,
-        _tracking: &Tracking,
+        state: &LayerState,
         renderer: &Renderer,
         theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        match &self.layer {
-            Layer::Base => self.draw_base(&mut frame, theme),
-            Layer::Annotations(range) => self.draw_annotations(&mut frame, range.clone()),
-            Layer::Overlay => self.draw_overlay(&mut frame, theme),
-        }
-        vec![frame.into_geometry()]
+        let size = bounds.size();
+        let viewport = self.editor.viewport(size);
+        let geometry = match &self.layer {
+            Layer::Base => {
+                let backdrop = backdrop(theme);
+                let content = Content::Base {
+                    image: self.editor.image().id(),
+                    viewport,
+                    backdrop,
+                };
+                state.drawing.draw(renderer, size, Some(content), |frame| {
+                    self.draw_base(frame, &viewport, backdrop);
+                })
+            }
+            Layer::Annotations(range) => {
+                let annotations = &self.editor.document().annotations()[range.clone()];
+                let preview = self.editor.active_tool().preview();
+                let content = annotations
+                    .iter()
+                    .all(|annotation| unchanged(annotation, &preview))
+                    .then_some(Content::Annotations {
+                        viewport,
+                        annotations: Cow::Borrowed(annotations),
+                    });
+                state.drawing.draw(renderer, size, content, |frame| {
+                    self.draw_annotations(frame, &viewport, annotations, &preview);
+                })
+            }
+            Layer::Overlay => {
+                let mut frame = Frame::new(renderer, size);
+                self.draw_overlay(&mut frame, theme);
+                frame.into_geometry()
+            }
+        };
+        vec![geometry]
     }
 
     fn mouse_interaction(
         &self,
-        _tracking: &Tracking,
+        _state: &LayerState,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Interaction {
@@ -464,6 +596,7 @@ mod tests {
         let moving = Preview::Moved(&[a.id()][..], delta);
         assert_eq!(shown(a, &moving), Some(moved));
         assert_eq!(shown(b, &moving), Some(b.shape.clone()));
+        assert!(!unchanged(a, &moving) && unchanged(b, &moving));
 
         let reshaped = Shape::Line(Line {
             start: DocPoint::ORIGIN,
@@ -472,10 +605,57 @@ mod tests {
         let reshaping = Preview::Reshaped(b.id(), &reshaped);
         assert_eq!(shown(b, &reshaping), Some(reshaped.clone()));
         assert_eq!(shown(a, &reshaping), Some(a.shape.clone()));
+        assert!(!unchanged(b, &reshaping) && unchanged(a, &reshaping));
 
         let edit = tools::TextEdit::existing(&document, t.id()).unwrap();
         assert_eq!(shown(t, &Preview::Text(&edit)), None);
         assert_eq!(shown(a, &Preview::Text(&edit)), Some(a.shape.clone()));
+        assert!(!unchanged(t, &Preview::Text(&edit)) && unchanged(a, &Preview::Text(&edit)));
+    }
+
+    fn headless_renderer() -> Renderer {
+        block_on(<Renderer as renderer::Headless>::new(
+            iced::Font::DEFAULT,
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a tiny-skia renderer")
+    }
+
+    #[test]
+    fn a_layer_is_redrawn_only_when_its_content_changes() {
+        let renderer = headless_renderer();
+        let document = document("st");
+        let annotations = document.annotations();
+        let size = Size::new(40.0, 40.0);
+        let view = |canvas| View::default().viewport(canvas, document.bounds().size());
+        let shows = |viewport, annotations| {
+            Some(Content::Annotations {
+                viewport,
+                annotations: Cow::Borrowed(annotations),
+            })
+        };
+        let drawing = Drawing::default();
+        let draws = std::cell::Cell::new(0);
+        let draw = |content| {
+            let _ = drawing.draw(&renderer, size, content, |_| draws.set(draws.get() + 1));
+            draws.get()
+        };
+
+        assert_eq!(draw(shows(view(size), annotations)), 1);
+        assert_eq!(draw(shows(view(size), annotations)), 1, "unchanged: kept");
+        assert_eq!(draw(shows(view(size), &annotations[..1])), 2);
+        assert_eq!(
+            draw(shows(view(Size::new(80.0, 80.0)), &annotations[..1])),
+            3
+        );
+        assert_eq!(draw(None), 4);
+        assert_eq!(draw(None), 5, "previewed: drawn every time");
+        assert_eq!(
+            draw(shows(view(Size::new(80.0, 80.0)), &annotations[..1])),
+            6,
+            "not kept across a preview"
+        );
     }
 
     /// Drives the canvas's widget tree headlessly, as the iced runtime does:
@@ -489,14 +669,8 @@ mod tests {
 
     impl Headless {
         fn new() -> Self {
-            let renderer = block_on(<Renderer as renderer::Headless>::new(
-                iced::Font::DEFAULT,
-                iced::Pixels(16.0),
-                Some("tiny-skia"),
-            ))
-            .expect("a tiny-skia renderer");
             Self {
-                renderer,
+                renderer: headless_renderer(),
                 cache: None,
             }
         }
