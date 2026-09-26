@@ -211,13 +211,14 @@ impl App {
 
     /// Handles `message`, then every message its tasks produce, depth first,
     /// until nothing is left to do. Futures run to completion on this thread.
-    /// Other actions (opening or focusing a window, …) are dropped as they
-    /// arrive, so tasks waiting on their answer end. Returns every message
-    /// handled, in order, starting with `message`.
+    /// Closing a window is answered with [`Message::WindowClosed`], as the
+    /// runtime does. Other actions (opening or focusing a window, …) are
+    /// dropped as they arrive, so tasks waiting on their answer end. Returns
+    /// every message handled, in order, starting with `message`.
     pub fn settle(&mut self, message: Message) -> Vec<Message> {
         use futures::executor::block_on;
         use futures::StreamExt;
-        use iced_runtime::Action;
+        use iced_runtime::{window, Action};
 
         let mut pending = vec![message];
         let mut handled = Vec::new();
@@ -231,6 +232,9 @@ impl App {
                             .filter_map(|action| {
                                 futures::future::ready(match action {
                                     Action::Output(message) => Some(message),
+                                    Action::Window(window::Action::Close(id)) => {
+                                        Some(Message::WindowClosed(id))
+                                    }
                                     _ => None,
                                 })
                             })
