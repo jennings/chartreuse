@@ -35,6 +35,13 @@ futures = "0.3.34"
 # Logging.
 tracing = "0.1.44"
 
+# Save locations and file names, shared by the app and chartreuse-config: the
+# platform's standard folders, date/time stamps, and temporary files (atomic
+# settings writes; tests).
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+dirs = "6.0.0"
+tempfile = "3.27.0"
+
 # macOS bindings: the objc2 family, used by every macOS track (kept here, even
 # while only chartreuse-platform uses it, so that all macOS code shares one set
 # of bindings). Declared with all framework features enabled so tracks never
