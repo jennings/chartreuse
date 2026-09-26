@@ -312,9 +312,9 @@ Depends on: 1D; the window capture decisions for the capture half. Owns:
 
 Depends on: 2D (shares its overlay patterns). Owns: `chartreuse-overlay::window`
 
-- [ ] `Canvas` program that dims everything except the hovered window, with the
+- [x] `Canvas` program that dims everything except the hovered window, with the
       highlight following the pointer
-- [ ] Click commits and Escape cancels
+- [x] Click commits and Escape cancels
 
 ### Integration (sequential, app crate)
 
