@@ -351,10 +351,10 @@ Depends on: 1B, 1F, I4. Owns: `crates/chartreuse/src/settings.rs`, the settings 
 Depends on: 2E (tool framework), 2F. Every tool below is its own module and can run as a
 separate parallel agent.
 
-- [ ] Ellipse
-- [ ] Freehand pen
-- [ ] Highlighter
-- [ ] Numbered step markers, with automatic numbering that stays correct when a marker
+- [x] Ellipse
+- [x] Freehand pen
+- [x] Highlighter
+- [x] Numbered step markers, with automatic numbering that stays correct when a marker
       is deleted
 - [ ] Blur / pixelate region (uses the 1E kernels)
 - [ ] Crop, undoable and non-destructive until export
