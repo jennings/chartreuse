@@ -7,6 +7,7 @@
 
 mod capture;
 mod clipboard;
+mod connection;
 mod dialogs;
 mod displays;
 mod hotkeys;
