@@ -24,8 +24,15 @@
 //! Neighbours therefore stay adjacent without gaps; where monitors of mixed
 //! scale form an L or a ring, logical rectangles can overlap slightly, which the
 //! display model tolerates.
+//!
+//! Physical points and rectangles elsewhere on the desktop (window bounds) are
+//! converted through the monitor they are on ([`MonitorLayout::rect_to_logical`]):
+//! within a monitor, `logical = logical_origin + (physical - physical_origin) /
+//! scale`.
 
-use chartreuse_core::geometry::{LogicalPoint, LogicalRect, PhysicalRect, ScaleFactor};
+use chartreuse_core::geometry::{
+    LogicalPoint, LogicalRect, PhysicalPoint, PhysicalRect, ScaleFactor,
+};
 
 /// The DPI Windows treats as scale factor 1 (`USER_DEFAULT_SCREEN_DPI`).
 pub(super) const BASE_DPI: u32 = 96;
@@ -86,6 +93,65 @@ impl MonitorLayout {
             size: monitor.physical.size.to_logical(monitor.scale),
         }
     }
+
+    /// Converts a physical rectangle (window bounds) to logical coordinates through
+    /// the monitor it overlaps most, or the nearest monitor if it overlaps none.
+    /// `None` only if there are no monitors.
+    pub(super) fn rect_to_logical(&self, rect: PhysicalRect) -> Option<LogicalRect> {
+        let index = self.monitor_for(rect)?;
+        let top_left = self.point_to_logical(index, rect.origin);
+        let size = rect.size.to_logical(self.monitors[index].scale);
+        Some(LogicalRect {
+            origin: top_left,
+            size,
+        })
+    }
+
+    /// The monitor with the largest overlap with `rect`, else the one closest to
+    /// its centre (like `MonitorFromRect` with `MONITOR_DEFAULTTONEAREST`).
+    fn monitor_for(&self, rect: PhysicalRect) -> Option<usize> {
+        let area = |r: PhysicalRect| u64::from(r.size.width) * u64::from(r.size.height);
+        let overlapping = self
+            .monitors
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| Some((i, area(m.physical.intersection(&rect)?))))
+            // `max_by_key` keeps the last maximum; reverse so the first one wins.
+            .rev()
+            .max_by_key(|&(_, overlap)| overlap)
+            .map(|(i, _)| i);
+        overlapping.or_else(|| {
+            let cx = rect.min_x() as f64 + f64::from(rect.size.width) / 2.0;
+            let cy = rect.min_y() as f64 + f64::from(rect.size.height) / 2.0;
+            self.monitors
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (i, distance_squared(m.physical, cx, cy)))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        })
+    }
+
+    fn point_to_logical(&self, index: usize, point: PhysicalPoint) -> LogicalPoint {
+        let monitor = &self.monitors[index];
+        let origin = self.origins[index];
+        let scale = monitor.scale.get();
+        LogicalPoint::new(
+            origin.x + (f64::from(point.x) - f64::from(monitor.physical.min_x())) / scale,
+            origin.y + (f64::from(point.y) - f64::from(monitor.physical.min_y())) / scale,
+        )
+    }
+}
+
+/// The squared distance from `(x, y)` to the nearest point of `rect`.
+fn distance_squared(rect: PhysicalRect, x: f64, y: f64) -> f64 {
+    let dx = (rect.min_x() as f64 - x)
+        .max(0.0)
+        .max(x - rect.max_x() as f64);
+    let dy = (rect.min_y() as f64 - y)
+        .max(0.0)
+        .max(y - rect.max_y() as f64);
+    dx * dx + dy * dy
 }
 
 /// The first unplaced monitor touching a placed one, and its logical origin.
@@ -243,6 +309,46 @@ mod tests {
         assert_eq!(
             layout.logical_bounds(1),
             LogicalRect::new(3840.0, 2160.0, 1920.0, 1080.0)
+        );
+    }
+
+    #[test]
+    fn windows_convert_through_the_monitor_they_overlap_most() {
+        let layout = MonitorLayout::new(vec![
+            monitor(0, 0, 3840, 2160, 2.0, true),
+            monitor(3840, 0, 1920, 1080, 1.0, false),
+        ]);
+        // Wholly on the primary: halved.
+        assert_eq!(
+            layout.rect_to_logical(PhysicalRect::new(200, 100, 800, 600)),
+            Some(LogicalRect::new(100.0, 50.0, 400.0, 300.0))
+        );
+        // Mostly on the 1× monitor, hanging 100 px over the primary's right edge.
+        assert_eq!(
+            layout.rect_to_logical(PhysicalRect::new(3740, 10, 1000, 500)),
+            Some(LogicalRect::new(1820.0, 10.0, 1000.0, 500.0))
+        );
+        // Mostly on the primary, hanging over onto the 1× monitor.
+        assert_eq!(
+            layout.rect_to_logical(PhysicalRect::new(3040, 0, 1000, 400)),
+            Some(LogicalRect::new(1520.0, 0.0, 500.0, 200.0))
+        );
+    }
+
+    #[test]
+    fn off_screen_windows_convert_through_the_nearest_monitor() {
+        let layout = MonitorLayout::new(vec![
+            monitor(0, 0, 3840, 2160, 2.0, true),
+            monitor(3840, 0, 1920, 1080, 1.0, false),
+        ]);
+        // Beyond the 1× monitor's right edge.
+        assert_eq!(
+            layout.rect_to_logical(PhysicalRect::new(6000, 100, 100, 100)),
+            Some(LogicalRect::new(1920.0 + 2160.0, 100.0, 100.0, 100.0))
+        );
+        assert_eq!(
+            MonitorLayout::new(Vec::new()).rect_to_logical(PhysicalRect::new(0, 0, 1, 1)),
+            None
         );
     }
 

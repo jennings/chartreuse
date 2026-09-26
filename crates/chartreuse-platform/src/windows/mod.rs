@@ -32,6 +32,7 @@ mod window_list;
 mod layout;
 #[cfg(windows)]
 mod util;
+mod window_filter;
 
 #[cfg(windows)]
 use std::sync::Arc;

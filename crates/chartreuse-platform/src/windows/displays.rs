@@ -48,12 +48,20 @@ impl WindowsDisplays {
 
 impl Displays for WindowsDisplays {
     fn displays(&self) -> Result<Vec<DisplayInfo>> {
-        enumerate()
+        Ok(enumerate()?.displays)
     }
 }
 
-/// Describes the connected monitors. Works on any thread.
-fn enumerate() -> Result<Vec<DisplayInfo>> {
+/// The connected monitors: their layout and their descriptions, in the same
+/// order.
+#[derive(Debug)]
+pub(super) struct Monitors {
+    pub layout: MonitorLayout,
+    pub displays: Vec<DisplayInfo>,
+}
+
+/// Enumerates the connected monitors. Works on any thread.
+pub(super) fn enumerate() -> Result<Monitors> {
     let mut handles: Vec<HMONITOR> = Vec::new();
     // SAFETY: `collect_monitor` only runs during this call and receives a pointer to
     // `handles`, which outlives it.
@@ -78,7 +86,7 @@ fn enumerate() -> Result<Vec<DisplayInfo>> {
         devices.push(device);
     }
     let layout = MonitorLayout::new(monitors.clone());
-    Ok(handles
+    let displays = handles
         .iter()
         .zip(&monitors)
         .zip(&devices)
@@ -94,7 +102,8 @@ fn enumerate() -> Result<Vec<DisplayInfo>> {
             scale_factor: monitor.scale,
             is_primary: monitor.is_primary,
         })
-        .collect())
+        .collect();
+    Ok(Monitors { layout, displays })
 }
 
 /// `MONITORENUMPROC`: appends the monitor to the `Vec<HMONITOR>` behind `data`.
