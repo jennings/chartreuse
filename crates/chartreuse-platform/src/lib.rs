@@ -77,7 +77,8 @@ pub mod window_list;
 #[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(target_os = "windows")]
+// On other hosts only its portable helpers are compiled, for their unit tests.
+#[cfg(any(target_os = "windows", test))]
 mod windows;
 
 #[cfg(all(unix, not(target_os = "macos")))]

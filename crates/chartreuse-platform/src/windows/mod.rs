@@ -1,25 +1,42 @@
 //! The Windows backend: one file per platform trait, so parallel tracks never edit
 //! the same file.
 //!
-//! Each file exports one backend type with a `new()` constructor. Keep that
-//! constructor infallible and argument-free so this file never changes; do
-//! fallible setup lazily in the trait methods.
+//! Each trait file exports one backend type with a `new()` constructor. Keep that
+//! constructor infallible and argument-free; do fallible setup lazily in the trait
+//! methods.
+//!
+//! The trait files call Win32 and are compiled on Windows only. Their portable
+//! logic (DPI math, coordinate conversion, …) lives in separate modules that are
+//! also compiled into the test build on every host, so it is unit-tested
+//! everywhere.
 
+#[cfg(windows)]
 mod capture;
+#[cfg(windows)]
 mod clipboard;
+#[cfg(windows)]
 mod dialogs;
+#[cfg(windows)]
 mod displays;
+#[cfg(windows)]
 mod hotkeys;
+#[cfg(windows)]
 mod overlay_style;
+#[cfg(windows)]
 mod permissions;
+#[cfg(windows)]
 mod status_item;
+#[cfg(windows)]
 mod window_list;
 
+#[cfg(windows)]
 use std::sync::Arc;
 
+#[cfg(windows)]
 use crate::Platform;
 
 /// Every Windows backend.
+#[cfg(windows)]
 pub fn platform() -> Platform {
     Platform {
         displays: Box::new(displays::WindowsDisplays::new()),
