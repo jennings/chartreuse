@@ -11,13 +11,14 @@
 //!
 //! # Where files go
 //!
-//! [`save_target`] decides the directory and the file name, and is where the
-//! settings (1F's config, 3A's settings window) plug in:
+//! [`save_target`] decides the directory and the file name from the settings
+//! ([`App::config`]):
 //!
-//! - the directory is [`State::directory`] if set, else [`default_directory`]
-//!   (`~/Pictures/Chartreuse`); it is created if missing;
-//! - the file name is [`file_stem`] of the local time, such as
-//!   `Chartreuse 2026-09-25 at 14.03.07`, plus `.png`.
+//! - the directory is the configured save directory
+//!   ([`Settings::save_directory_path`], `~/Pictures/Chartreuse` by default);
+//!   it is created if missing;
+//! - the file name is the configured file name pattern expanded with the
+//!   local time, such as `Chartreuse 2026-09-25 at 14.03.07`, plus `.png`.
 //!
 //! An existing file is never overwritten: the name gets a ` (2)`, ` (3)`, …
 //! suffix ([`file_name`]) until it is free. Files are created exclusively, so two
@@ -35,6 +36,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chartreuse_config::Settings;
 use chartreuse_core::image::Image;
 use chartreuse_core::{Error, Result};
 use chartreuse_imaging::Format;
@@ -44,19 +46,12 @@ use iced::{Subscription, Task};
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
 
-/// The folder inside the user's Pictures folder that saves go to by default.
-const DEFAULT_FOLDER: &str = "Chartreuse";
-
 /// How many ` (n)` suffixes to try before giving up on a file name.
 const MAX_NAME_ATTEMPTS: u32 = 10_000;
 
 /// This feature's part of the app state ([`App::export`]).
 #[derive(Debug, Default)]
-pub struct State {
-    /// The directory saves go to, overriding [`default_directory`]. Set from the
-    /// settings once they exist (1F/3A), and by tests.
-    pub directory: Option<PathBuf>,
-}
+pub struct State {}
 
 /// This feature's messages ([`AppMessage::Export`]).
 #[derive(Debug, Clone)]
@@ -66,24 +61,6 @@ pub enum Message {
     CopyAndSave(Arc<Image>),
     /// A save finished: the new file, or why it failed.
     Saved(Result<PathBuf>),
-}
-
-/// The default save directory: `Chartreuse` in the user's Pictures folder
-/// (`~/Pictures/Chartreuse` on macOS). `None` if the platform reports no
-/// Pictures or home folder.
-#[must_use]
-pub fn default_directory() -> Option<PathBuf> {
-    dirs::picture_dir()
-        .or_else(|| dirs::home_dir().map(|home| home.join("Pictures")))
-        .map(|pictures| pictures.join(DEFAULT_FOLDER))
-}
-
-/// The file name, without extension, of an image saved at local time `time`:
-/// `Chartreuse 2026-09-25 at 14.03.07`. Dots separate the time because macOS
-/// Finder shows `:` in file names as `/`.
-#[must_use]
-pub fn file_stem(time: NaiveDateTime) -> String {
-    time.format("Chartreuse %Y-%m-%d at %H.%M.%S").to_string()
 }
 
 /// The file name for the `attempt`th try at saving as `stem`: `stem.ext` first,
@@ -97,20 +74,18 @@ pub fn file_name(stem: &str, extension: &str, attempt: u32) -> String {
     }
 }
 
-/// Where a save made at local time `now` goes: the directory and the file stem.
+/// Where a save made at local time `now` goes, by `config`: the directory and
+/// the file stem.
 ///
 /// # Errors
 ///
 /// [`Error::Config`] if no directory is configured and the platform has no
 /// Pictures or home folder to default to.
-pub fn save_target(state: &State, now: NaiveDateTime) -> Result<(PathBuf, String)> {
-    let directory = match &state.directory {
-        Some(directory) => directory.clone(),
-        None => default_directory().ok_or_else(|| {
-            Error::Config("there is no Pictures or home folder to save into".into())
-        })?,
-    };
-    Ok((directory, file_stem(now)))
+pub fn save_target(config: &Settings, now: NaiveDateTime) -> Result<(PathBuf, String)> {
+    let directory = config
+        .save_directory_path()
+        .ok_or_else(|| Error::Config("there is no Pictures or home folder to save into".into()))?;
+    Ok((directory, config.file_name.expand(now)))
 }
 
 /// Encodes `image` as PNG and writes it to a new file named after `stem` in
@@ -199,7 +174,7 @@ fn copy(app: &mut App, image: &Image) -> Task<AppMessage> {
 /// Starts saving `image` to the save directory; the outcome arrives as
 /// [`Message::Saved`].
 fn save(app: &mut App, image: Arc<Image>) -> Task<AppMessage> {
-    let (directory, stem) = match save_target(&app.export, chrono::Local::now().naive_local()) {
+    let (directory, stem) = match save_target(&app.config, chrono::Local::now().naive_local()) {
         Ok(target) => target,
         Err(error) => {
             return alert::report_error(
@@ -216,12 +191,20 @@ fn save(app: &mut App, image: Arc<Image>) -> Task<AppMessage> {
 
 #[cfg(test)]
 mod tests {
+    use chartreuse_config::SaveDirectory;
     use chartreuse_core::color::Rgba8;
     use chartreuse_core::geometry::PhysicalSize;
     use chrono::NaiveDate;
 
     use super::*;
     use crate::windows::WindowKind;
+
+    /// A test app whose saves go to `directory`.
+    fn app_saving_to(directory: &Path) -> (App, chartreuse_platform::fake::Fake) {
+        let (mut app, fake) = App::for_test();
+        app.config.save_directory = Some(SaveDirectory::new(directory).unwrap());
+        (app, fake)
+    }
 
     fn sample() -> Image {
         Image::from_fn(PhysicalSize::new(7, 3), |x, y| {
@@ -246,15 +229,6 @@ mod tests {
             .collect();
         names.sort();
         names
-    }
-
-    #[test]
-    fn file_names_are_timestamped_and_zero_padded() {
-        let time = NaiveDate::from_ymd_opt(2026, 9, 5)
-            .unwrap()
-            .and_hms_opt(4, 3, 7)
-            .unwrap();
-        assert_eq!(file_stem(time), "Chartreuse 2026-09-05 at 04.03.07");
     }
 
     #[test]
@@ -294,24 +268,25 @@ mod tests {
     }
 
     #[test]
-    fn a_configured_directory_overrides_the_default() {
+    fn the_target_follows_the_configured_directory_and_file_name_pattern() {
         let now = NaiveDate::from_ymd_opt(2026, 1, 2)
             .unwrap()
             .and_hms_opt(3, 4, 5)
             .unwrap();
-        let state = State {
-            directory: Some(PathBuf::from("/somewhere")),
+        let config = Settings {
+            save_directory: Some(SaveDirectory::new("/somewhere").unwrap()),
+            file_name: "Shot {yyyy}{MM}{dd}-{HH}{mm}{ss}".parse().unwrap(),
+            ..Settings::default()
         };
-        let (directory, stem) = save_target(&state, now).unwrap();
+        let (directory, stem) = save_target(&config, now).unwrap();
         assert_eq!(directory, Path::new("/somewhere"));
-        assert_eq!(stem, file_stem(now));
+        assert_eq!(stem, "Shot 20260102-030405");
     }
 
     #[test]
     fn copy_and_save_copies_and_writes_a_png() {
-        let (mut app, fake) = App::for_test();
         let temp = tempfile::tempdir().unwrap();
-        app.export.directory = Some(temp.path().to_owned());
+        let (mut app, fake) = app_saving_to(temp.path());
         let image = sample();
 
         let handled = app.settle(AppMessage::Export(Message::CopyAndSave(Arc::new(
@@ -347,10 +322,9 @@ mod tests {
             }
         }
 
-        let (mut app, _fake) = App::for_test();
-        app.platform.clipboard = Box::new(Broken);
         let temp = tempfile::tempdir().unwrap();
-        app.export.directory = Some(temp.path().to_owned());
+        let (mut app, _fake) = app_saving_to(temp.path());
+        app.platform.clipboard = Box::new(Broken);
 
         let _ = app.settle(AppMessage::Export(Message::CopyAndSave(Arc::new(sample()))));
         assert_eq!(alerts(&app), 1);
@@ -359,11 +333,10 @@ mod tests {
 
     #[test]
     fn a_failed_save_is_reported() {
-        let (mut app, fake) = App::for_test();
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("in the way");
         fs::write(&file, b"").unwrap();
-        app.export.directory = Some(file.join("inside"));
+        let (mut app, fake) = app_saving_to(&file.join("inside"));
 
         let _ = app.settle(AppMessage::Export(Message::CopyAndSave(Arc::new(sample()))));
         assert_eq!(alerts(&app), 1);

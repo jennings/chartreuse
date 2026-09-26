@@ -567,7 +567,6 @@ dependencies = [
  "chartreuse-overlay",
  "chartreuse-platform",
  "chrono",
- "dirs",
  "futures",
  "iced",
  "iced_runtime",

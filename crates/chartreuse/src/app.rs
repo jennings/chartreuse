@@ -29,6 +29,13 @@
 //! owning module. Report problems to the user with
 //! [`alert::report_error`](crate::alert::report_error).
 //!
+//! # Settings
+//!
+//! [`App::config`] holds the user's settings (`chartreuse_config`), loaded from
+//! the settings file by [`App::boot`] before any module boots. A settings file
+//! that cannot be read, or holds invalid settings, is reported to the user and
+//! the defaults are used instead; the file is left alone.
+//!
 //! # Threading
 //!
 //! `boot`, `update`, `view`, and `subscription` run on the main thread; call
@@ -37,11 +44,13 @@
 //! anything else that needs the running `NSApplication` run loop) belongs in
 //! `update`: have `boot` return `Task::done` with the module's install message.
 
+use chartreuse_config::Settings;
 use chartreuse_core::flavor;
 use chartreuse_platform::{fake, Platform};
 use iced::widget::space;
 use iced::{window, Element, Subscription, Task, Theme};
 
+use crate::alert::Notice;
 use crate::windows::{WindowKind, WindowRegistry};
 use crate::{
     alert, capture, editor, export, hotkeys, import, overlay, permission, settings, theme, tray,
@@ -57,6 +66,8 @@ pub struct App {
     pub platform: Platform,
     pub windows: WindowRegistry,
     pub theme: Theme,
+    /// The user's settings (see [Settings](self#settings)).
+    pub config: Settings,
     pub alert: alert::State,
     pub hotkeys: hotkeys::State,
     pub tray: tray::State,
@@ -92,6 +103,7 @@ impl App {
             platform,
             windows: WindowRegistry::default(),
             theme: theme::theme(flavor::ACCENT),
+            config: Settings::default(),
             alert: alert::State::default(),
             hotkeys: hotkeys::State::default(),
             tray: tray::State::default(),
@@ -105,8 +117,8 @@ impl App {
         }
     }
 
-    /// Creates the state and runs every module's `boot`. Called by iced on the
-    /// main thread.
+    /// Loads the settings, then creates the state and runs every module's
+    /// `boot`. Called by iced on the main thread.
     pub fn boot() -> (Self, Task<Message>) {
         let platform = match std::env::var(BACKEND_ENV).as_deref() {
             Ok("fake") => {
@@ -116,6 +128,7 @@ impl App {
             _ => chartreuse_platform::current(),
         };
         let mut app = Self::new(platform);
+        let config = app.load_config();
         let boots: [fn(&mut Self) -> Task<Message>; 10] = [
             permission::boot,
             tray::boot,
@@ -128,8 +141,29 @@ impl App {
             export::boot,
             alert::boot,
         ];
-        let tasks: Vec<Task<Message>> = boots.into_iter().map(|boot| boot(&mut app)).collect();
+        let tasks: Vec<Task<Message>> = std::iter::once(config)
+            .chain(boots.into_iter().map(|boot| boot(&mut app)))
+            .collect();
         (app, Task::batch(tasks))
+    }
+
+    /// Loads the settings file into [`App::config`]; if that fails, keeps the
+    /// defaults and returns the task that tells the user.
+    fn load_config(&mut self) -> Task<Message> {
+        let loaded = chartreuse_config::settings_path().and_then(|path| {
+            tracing::info!(path = %path.display(), "loading the settings");
+            chartreuse_config::load(&path)
+        });
+        match loaded {
+            Ok(config) => {
+                self.config = config;
+                Task::none()
+            }
+            Err(error) => alert::report_error(
+                self,
+                Notice::from_error("Using the default settings", &error),
+            ),
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {

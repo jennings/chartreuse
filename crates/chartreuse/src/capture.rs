@@ -342,7 +342,8 @@ mod tests {
     fn app() -> (App, Fake, tempfile::TempDir) {
         let (mut app, fake) = App::for_test();
         let saves = tempfile::tempdir().unwrap();
-        app.export.directory = Some(saves.path().to_owned());
+        app.config.save_directory =
+            Some(chartreuse_config::SaveDirectory::new(saves.path()).unwrap());
         (app, fake, saves)
     }
 

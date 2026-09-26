@@ -20,8 +20,6 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # Local time for saved file names.
 chrono = { workspace = true, features = ["clock"] }
-# The platform's Pictures folder, the default save directory.
-dirs.workspace = true
 
 [dev-dependencies]
 futures.workspace = true
