@@ -463,6 +463,7 @@ Depends on: 4A.
 
 - [ ] Installer (tool chosen in this track) built by `cargo xtask release` on Windows, with
       code signing if available; CI uploads the artifact
+- [ ] Embed `chartreuse.ico` as the Windows executable's icon resource (build script, rc.exe)
 
 ### 5C — Linux packages
 
@@ -476,5 +477,5 @@ Depends on: 4B.
 
 Depends on: nothing; can be done at any time.
 
-- [ ] App icon (`.icns`, `.ico`, PNG sizes)
-- [ ] Status item template icon and tray icons
+- [x] App icon (`.icns`, `.ico`, PNG sizes)
+- [x] Status item template icon and tray icons
