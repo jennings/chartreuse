@@ -220,17 +220,17 @@ Depends on: Stage 0. Owns: `.github/workflows/` release workflows and any xtask 
 they need (for example an upload command). 5A, 5B, and 5C later extend what each
 platform's `cargo xtask release` produces; this track makes sure it reaches users.
 
-- [ ] A workflow triggered when a GitHub release is **created** (`release: types:
+- [x] A workflow triggered when a GitHub release is **created** (`release: types:
       [created]`, not `published`)
-- [ ] A job per supported platform (macOS, Windows, Linux) that runs `cargo xtask release`
+- [x] A job per supported platform (macOS, Windows, Linux) that runs `cargo xtask release`
       for the release's tag, so every platform's release build comes from one source
-- [ ] Attach every platform's release output to the triggering release as downloadable
+- [x] Attach every platform's release output to the triggering release as downloadable
       assets, through an xtask command (e.g. `cargo xtask upload-release <tag>`) so the
       workflow keeps no logic of its own
-- [ ] Platforms whose release packaging isn't done yet still attach a usable build (e.g.
+- [x] Platforms whose release packaging isn't done yet still attach a usable build (e.g.
       an ad-hoc signed macOS app until 5A, a zipped binary for Windows and Linux until 5B
       and 5C), named so users can tell platform and architecture apart
-- [ ] Document cutting a release through GitHub in the README
+- [x] Document cutting a release through GitHub in the README
 
 **Gate:** Stage 1 tracks are merged as each finishes. Each Stage 2 track may start as
 soon as its own dependencies have landed.

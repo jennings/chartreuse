@@ -131,6 +131,34 @@ The build flavor (development or release: bundle identifier, name, accent color)
 chosen by the `release-flavor` cargo feature, which only `cargo xtask release`
 enables; it is independent of the optimization profile.
 
+## Cutting a release
+
+GitHub Actions builds every platform and attaches the archives to the release
+([`.github/workflows/release.yml`](.github/workflows/release.yml)):
+
+1. Set `version` under `[workspace.package]` in `Cargo.toml` to the new version,
+   and push that commit.
+2. Create the release with a tag named `v<version>` (e.g. `v0.2.0`) on that commit,
+   and publish it straight away: on GitHub, *Releases → Draft a new release*, then
+   *Publish release* (tick *Set as a pre-release* for a trial run), or
+   `gh release create v0.2.0 --target main --generate-notes` (`--prerelease` for a
+   trial). Do not *Save draft* first: GitHub runs no workflows for drafts, and the
+   workflow runs when a release is created, not when a draft is published.
+3. The *Release* workflow builds on macOS, Windows, and Linux, then attaches:
+   - `Chartreuse-<version>-macos-aarch64-unsigned.zip`: Apple silicon, **ad-hoc
+     signed** until Developer ID signing and notarization land (track 5A).
+     Gatekeeper blocks it on first launch; allow it under *System Settings →
+     Privacy & Security → Open Anyway*.
+   - `Chartreuse-<version>-windows-x86_64.zip`
+   - `Chartreuse-<version>-linux-x86_64.tar.gz`
+
+A tag that does not match the `Cargo.toml` version fails the upload, naming both.
+Re-running a failed job replaces that platform's assets. Running the workflow by hand
+(*Actions → Release → Run workflow*) is a dry run: it builds a branch on every
+platform and keeps the archives as workflow artifacts, attaching nothing. Without
+GitHub Actions, run `cargo xtask release` and then `cargo xtask upload-release
+v<version>` on each platform.
+
 ## Repository layout
 
 | Path | Contents |

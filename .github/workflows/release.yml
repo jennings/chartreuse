@@ -1,26 +1,64 @@
-# Builds a release with `cargo xtask release` and uploads its output. Signing
-# credentials (and `cargo xtask ci-keychain`) are added in track 5A; until then
-# the run fails, naming the missing environment variable.
+# Builds every platform's release with `cargo xtask release` and attaches the
+# archives to the GitHub release with `cargo xtask upload-release`. Like CI, it
+# runs nothing but `cargo xtask` commands after checkout and toolchain setup.
+#
+# - `release: created` fires when a release (or pre-release) is published
+#   without first being saved as a draft; GitHub does not run workflows for
+#   drafts. See "Cutting a release" in the README.
+# - Running it by hand (workflow_dispatch) is a dry run: it builds every
+#   platform and keeps the archives as workflow artifacts, uploading nothing
+#   to a release.
 name: Release
 
 on:
+  release:
+    types: [created]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+defaults:
+  run:
+    # bash on every runner, so "$RELEASE_TAG" means the same thing on Windows.
+    shell: bash
 
 jobs:
-  macos:
-    name: macOS
-    runs-on: macos-latest
+  release:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
+          - name: Linux
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      # Empty for manual runs, which build the selected branch.
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      # Installs the toolchain pinned in rust-toolchain.toml.
       - run: rustup toolchain install
-      - run: cargo xtask release
+      # `--allow-ad-hoc` only matters on macOS, and only while the signing
+      # secret is unset: the app is then signed ad-hoc and its archive is
+      # named `-unsigned`. Track 5A adds the credentials and drops the flag.
+      - run: cargo xtask release --allow-ad-hoc
         env:
           CHARTREUSE_RELEASE_SIGN_IDENTITY: ${{ secrets.CHARTREUSE_RELEASE_SIGN_IDENTITY }}
       - uses: actions/upload-artifact@v4
         with:
-          name: chartreuse-macos
+          name: chartreuse-${{ matrix.name }}
           path: target/dist/
           if-no-files-found: error
+      - if: github.event_name == 'release'
+        run: cargo xtask upload-release "$RELEASE_TAG"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
