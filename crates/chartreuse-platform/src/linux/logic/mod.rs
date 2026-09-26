@@ -7,6 +7,7 @@ pub mod file_chooser;
 pub mod keysym;
 pub mod randr;
 pub mod tray;
+pub mod wl_output;
 pub mod xgrab;
 pub mod ximage;
 pub mod xsettings;
