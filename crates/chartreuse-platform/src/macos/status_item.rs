@@ -10,12 +10,16 @@
 use chartreuse_core::{flavor, Error, Result};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSImage, NSMenu, NSMenuItem, NSStatusBar,
-    NSStatusItem, NSVariableStatusItemLength,
+use objc2::{
+    define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
-use objc2_foundation::{ns_string, NSInteger, NSObject, NSObjectProtocol, NSString};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSBitmapImageRep, NSImage, NSMenu, NSMenuItem,
+    NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+};
+use objc2_foundation::{
+    ns_string, NSData, NSInteger, NSObject, NSObjectProtocol, NSSize, NSString,
+};
 
 use crate::event::{self, EventSender, Registration};
 use crate::status_item::{MenuAction, MenuEntry, StatusItem, StatusItemHandle, MENU};
@@ -133,15 +137,30 @@ impl MenuTarget {
     }
 }
 
-/// The placeholder menu bar icon: an SF Symbol, as a template image so the menu
-/// bar tints it for light and dark appearances.
+/// The menu bar icon's side in points.
+const ICON_POINTS: f64 = 18.0;
+
+/// The menu bar icon at 1x and 2x: the Chartreuse mark, black on transparent.
+/// `cargo xtask icons` renders them from `assets/icon/status-item-template.svg`.
+const ICON_PNGS: [&[u8]; 2] = [
+    include_bytes!("../../../../assets/icon/generated/status-item-template.png"),
+    include_bytes!("../../../../assets/icon/generated/status-item-template@2x.png"),
+];
+
+/// The menu bar icon, as a template image so the menu bar tints it for light
+/// and dark appearances: [`ICON_POINTS`] square, with a representation per
+/// scale factor in [`ICON_PNGS`].
 fn icon() -> Result<Retained<NSImage>> {
-    let icon = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        ns_string!("camera.viewfinder"),
-        Some(&NSString::from_str(flavor::DISPLAY_NAME)),
-    )
-    .ok_or_else(|| Error::Platform("the status item icon symbol is unavailable".into()))?;
+    let size = NSSize::new(ICON_POINTS, ICON_POINTS);
+    let icon = NSImage::initWithSize(NSImage::alloc(), size);
+    for png in ICON_PNGS {
+        let rep = NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(png))
+            .ok_or_else(|| Error::Platform("the status item icon is not a valid PNG".into()))?;
+        rep.setSize(size);
+        icon.addRepresentation(&rep);
+    }
     icon.setTemplate(true);
+    icon.setAccessibilityDescription(Some(&NSString::from_str(flavor::DISPLAY_NAME)));
     Ok(icon)
 }
 
@@ -218,5 +237,18 @@ mod tests {
         for tag in [-1, past_the_end, NSInteger::MIN, NSInteger::MAX] {
             assert_eq!(action_for_tag(tag), None, "tag {tag}");
         }
+    }
+
+    #[test]
+    fn icon_is_an_18_point_template_at_1x_and_2x() {
+        let icon = icon().unwrap();
+        assert!(icon.isTemplate());
+        assert_eq!(icon.size(), NSSize::new(ICON_POINTS, ICON_POINTS));
+        let pixel_widths: Vec<NSInteger> = icon
+            .representations()
+            .iter()
+            .map(|rep| rep.pixelsWide())
+            .collect();
+        assert_eq!(pixel_widths, [18, 36]);
     }
 }
