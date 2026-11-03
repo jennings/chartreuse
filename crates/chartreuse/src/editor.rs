@@ -8,10 +8,12 @@
 //! image from the clipboard or a file). The window is titled with the time it
 //! opened and sized by [`window_size`]: big enough for the image at one screen
 //! point per pixel, within 80% of the primary display. The app is a menu bar
-//! app with no Dock icon, so the window is focused explicitly to bring it
-//! forward. Once it is open, the editor is told the window's scale factor
-//! (which not every platform reports by itself), so it draws highlighters at
-//! the display's resolution.
+//! app, so the window is focused explicitly to bring it forward. While any
+//! editor window is open the app shows in the Dock and the app switcher
+//! (`StatusItem::set_dock_visible`, macOS only) so the user can switch back to
+//! it; it leaves them when the last one closes. Once it is open, the editor is
+//! told the window's scale factor (which not every platform reports by
+//! itself), so it draws highlighters at the display's resolution.
 //!
 //! # The status bar
 //!
@@ -348,6 +350,9 @@ fn close_dialog<'a>(window: window::Id) -> Element<'a, AppMessage> {
 
 pub fn window_closed(app: &mut App, window: window::Id) -> Task<AppMessage> {
     app.editor.windows.remove(&window);
+    if app.editor.windows.is_empty() {
+        app.platform.status_item.set_dock_visible(false);
+    }
     Task::none()
 }
 
@@ -379,6 +384,7 @@ fn open(app: &mut App, image: Image) -> Task<AppMessage> {
         flavor::DISPLAY_NAME,
         opened.format("%Y-%m-%d %H:%M:%S")
     );
+    app.platform.status_item.set_dock_visible(true);
     app.editor.windows.insert(
         id,
         Session {
@@ -397,7 +403,8 @@ fn open(app: &mut App, image: Image) -> Task<AppMessage> {
             chartreuse_editor::Message::ScaleFactor(scale_factor),
         ))
     });
-    // The app has no Dock icon, so bring the window forward explicitly.
+    // A menu bar app is rarely active when it opens one, so bring the window
+    // forward explicitly.
     open.discard()
         .chain(window::gain_focus(id))
         .chain(scale_factor)
@@ -840,6 +847,20 @@ mod tests {
         let _ = app.settle(AppMessage::WindowClosed(window));
         assert!(app.editor.get(window).is_none());
         assert!(editors(&app).is_empty());
+    }
+
+    #[test]
+    fn the_app_is_in_the_dock_while_any_editor_is_open() {
+        let (mut app, fake) = App::for_test();
+        assert!(!fake.dock_visible());
+        let first = open_editor(&mut app, white());
+        let second = open_editor(&mut app, white());
+        assert!(fake.dock_visible());
+
+        let _ = app.settle(AppMessage::WindowClosed(first));
+        assert!(fake.dock_visible(), "one editor is still open");
+        let _ = app.settle(AppMessage::WindowClosed(second));
+        assert!(!fake.dock_visible());
     }
 
     fn request_close(app: &mut App, window: window::Id) {

@@ -61,6 +61,8 @@ struct State {
     /// The installed status item, keyed like `hotkeys`. Installing again replaces
     /// it; dropping a replaced handle leaves the newer one alone.
     menu: Option<(u64, EventSender<MenuAction>)>,
+    /// Whether the app shows in the Dock (`StatusItem::set_dock_visible`).
+    dock_visible: bool,
     generation: u64,
     open_answer: Option<PathBuf>,
     save_answer: Option<PathBuf>,
@@ -88,6 +90,7 @@ impl Default for State {
             reserved_hotkeys: HashSet::new(),
             hotkeys: Vec::new(),
             menu: None,
+            dock_visible: false,
             generation: 0,
             open_answer: None,
             save_answer: None,
@@ -296,6 +299,13 @@ impl Fake {
     #[must_use]
     pub fn status_item_installed(&self) -> bool {
         self.state.lock().menu.is_some()
+    }
+
+    /// Whether the app shows in the Dock, as last set with
+    /// `StatusItem::set_dock_visible` (hidden at first).
+    #[must_use]
+    pub fn dock_visible(&self) -> bool {
+        self.state.lock().dock_visible
     }
 
     /// Replaces the clipboard contents.

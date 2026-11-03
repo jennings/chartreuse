@@ -80,6 +80,9 @@ impl StatusItem for WindowsStatusItem {
             registration: Registration::new(installed),
         })
     }
+
+    /// The taskbar lists every window by itself.
+    fn set_dock_visible(&self, _visible: bool) {}
 }
 
 /// An installed tray icon. Dropping it removes the icon, then destroys the window

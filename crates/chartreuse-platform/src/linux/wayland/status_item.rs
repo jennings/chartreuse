@@ -20,4 +20,7 @@ impl StatusItem for WaylandStatusItem {
     fn install(&self) -> Result<StatusItemHandle> {
         tray::install()
     }
+
+    /// The taskbar lists every window by itself.
+    fn set_dock_visible(&self, _visible: bool) {}
 }

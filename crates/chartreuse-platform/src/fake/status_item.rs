@@ -44,6 +44,10 @@ impl StatusItem for Fake {
             }),
         })
     }
+
+    fn set_dock_visible(&self, visible: bool) {
+        self.state.lock().dock_visible = visible;
+    }
 }
 
 #[cfg(test)]

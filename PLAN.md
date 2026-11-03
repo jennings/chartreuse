@@ -78,6 +78,8 @@ profile. An optimized local build is still a development build.
 - **Open from file** shows the platform's open dialog, filtered to supported image
   formats. Files that cannot be decoded are reported to the user.
 - The program has no Dock / taskbar presence while only the status item is showing.
+  On macOS, while an editor window is open, the app shows in the Dock and the app
+  switcher (Cmd+Tab) so the user can switch back to it.
 
 ### Global hotkeys
 
@@ -207,7 +209,7 @@ import component produces the base image and the editor opens directly.
 | Window enumeration for hit-testing | `SCShareableContent` window list; `CGWindowListCopyWindowInfo` for z-order and bounds if needed. |
 | Screen Recording permission | TCC — `CGPreflightScreenCaptureAccess` / `CGRequestScreenCaptureAccess`. |
 | Overlay windows | `NSWindow` level above the menu bar and Dock (e.g. `NSScreenSaverWindowLevel`); `NSWindowCollectionBehavior` (`canJoinAllSpaces`, `fullScreenAuxiliary`) so overlays appear over full-screen apps and on the active Space. |
-| Background-only presence | `LSUIElement` in `Info.plist` / `NSApplicationActivationPolicyAccessory`. |
+| Background-only presence | `LSUIElement` in `Info.plist` / `NSApplicationActivationPolicyAccessory`; `NSApplicationActivationPolicyRegular` while an editor window is open. |
 | Status item | `NSStatusBar` / `NSStatusItem`. |
 | Global hotkeys | Carbon `RegisterEventHotKey` (does not require Accessibility permission). |
 | Displays & scale | `NSScreen`, `CGDisplay*`. |
