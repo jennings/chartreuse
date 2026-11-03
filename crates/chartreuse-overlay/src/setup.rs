@@ -222,7 +222,7 @@ pub fn size(bounds: &LogicalRect) -> Size {
 }
 
 /// No taskbar button on Windows. (macOS has no per-window equivalent: the Dock
-/// icon belongs to the app, which runs as an accessory.)
+/// icon belongs to the app, which shows one only while an editor is open.)
 #[cfg(target_os = "windows")]
 fn platform_specific() -> window::settings::PlatformSpecific {
     window::settings::PlatformSpecific {

@@ -187,6 +187,7 @@ mod tests {
             fn install(&self) -> Result<StatusItemHandle> {
                 Err(Error::Unsupported("the status item"))
             }
+            fn set_dock_visible(&self, _visible: bool) {}
         }
 
         let (mut app, _fake) = App::for_test();

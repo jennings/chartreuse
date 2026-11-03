@@ -71,6 +71,16 @@ pub trait StatusItem {
     /// startup, have `boot` return `Task::done` with an install message and
     /// install when `update` handles it (see the crate's Threading docs).
     fn install(&self) -> Result<StatusItemHandle>;
+
+    /// On macOS, shows or hides the app's Dock icon, and with it its entry in
+    /// the app switcher (Cmd+Tab): AppKit ties the two together through the
+    /// activation policy (regular when shown, accessory when hidden). Show it
+    /// while windows the user switches back to are open. Elsewhere the
+    /// taskbar already lists every window, so this does nothing.
+    ///
+    /// **Main thread only** on macOS (`NSApplication`): call it from iced
+    /// `update`.
+    fn set_dock_visible(&self, visible: bool);
 }
 
 #[cfg(test)]

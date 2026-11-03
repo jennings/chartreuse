@@ -57,12 +57,25 @@ impl StatusItem for MacosStatusItem {
         button.setToolTip(Some(&NSString::from_str(flavor::DISPLAY_NAME)));
         installed.item.setMenu(Some(&menu));
 
-        use_accessory_policy(mtm);
+        set_activation_policy(mtm, NSApplicationActivationPolicy::Accessory);
         tracing::info!("status item installed");
         Ok(StatusItemHandle {
             actions,
             registration: Registration::new(installed),
         })
+    }
+
+    fn set_dock_visible(&self, visible: bool) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            tracing::warn!(visible, "the Dock icon can only change on the main thread");
+            return;
+        };
+        let policy = if visible {
+            NSApplicationActivationPolicy::Regular
+        } else {
+            NSApplicationActivationPolicy::Accessory
+        };
+        set_activation_policy(mtm, policy);
     }
 }
 
@@ -81,16 +94,21 @@ impl Drop for Installed {
     }
 }
 
-/// Hides the Dock icon. The bundled app starts as an accessory already
+/// Switches the app to `policy`: `Regular` for a Dock icon and an app switcher
+/// entry, `Accessory` for neither. The bundled app starts as an accessory
 /// (`LSUIElement`); run unbundled (`cargo run`), winit makes it a regular app.
-fn use_accessory_policy(mtm: MainThreadMarker) {
+fn set_activation_policy(mtm: MainThreadMarker, policy: NSApplicationActivationPolicy) {
     let app = NSApplication::sharedApplication(mtm);
-    if app.activationPolicy() != NSApplicationActivationPolicy::Accessory
-        && !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory)
-    {
+    if app.activationPolicy() == policy {
+        return;
+    }
+    if app.setActivationPolicy(policy) {
+        tracing::debug!(?policy, "switched the activation policy");
+    } else {
         tracing::warn!(
-            policy = ?app.activationPolicy(),
-            "could not switch to the accessory activation policy"
+            current = ?app.activationPolicy(),
+            wanted = ?policy,
+            "could not switch the activation policy"
         );
     }
 }
