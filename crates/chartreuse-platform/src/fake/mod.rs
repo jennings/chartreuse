@@ -58,9 +58,10 @@ struct State {
     reserved_hotkeys: HashSet<Hotkey>,
     /// Live hotkey registrations, keyed by a unique generation number.
     hotkeys: Vec<(u64, Vec<HotkeyBinding>, EventSender<HotkeyEvent>)>,
-    /// The installed status item, keyed like `hotkeys`. Installing again replaces
-    /// it; dropping a replaced handle leaves the newer one alone.
-    menu: Option<(u64, EventSender<MenuAction>)>,
+    /// The installed status item's senders of menu actions and quit requests,
+    /// keyed like `hotkeys`. Installing again replaces it; dropping a replaced
+    /// handle leaves the newer one alone.
+    menu: Option<(u64, EventSender<MenuAction>, EventSender<()>)>,
     /// Whether the app shows in the Dock (`StatusItem::set_dock_visible`).
     dock_visible: bool,
     generation: u64,
@@ -292,7 +293,18 @@ impl Fake {
             .lock()
             .menu
             .as_ref()
-            .is_some_and(|(_, sender)| sender.send(action))
+            .is_some_and(|(_, sender, _)| sender.send(action))
+    }
+
+    /// Simulates asking the app to quit outside the status item menu (Cmd+Q on
+    /// macOS), which the status item refuses on the app's behalf. Returns
+    /// `true` if the status item is installed and the request was delivered.
+    pub fn request_quit(&self) -> bool {
+        self.state
+            .lock()
+            .menu
+            .as_ref()
+            .is_some_and(|(_, _, quits)| quits.send(()))
     }
 
     /// True while a status item is installed.

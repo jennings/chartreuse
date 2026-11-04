@@ -1,4 +1,5 @@
-//! Fake [`StatusItem`]: menu choices made with [`Fake::choose_menu_action`].
+//! Fake [`StatusItem`]: menu choices made with [`Fake::choose_menu_action`],
+//! and quit requests with [`Fake::request_quit`].
 
 use std::sync::{Arc, Weak};
 
@@ -22,7 +23,7 @@ impl Drop for Uninstall {
             if state
                 .menu
                 .as_ref()
-                .is_some_and(|(generation, _)| *generation == self.generation)
+                .is_some_and(|(generation, _, _)| *generation == self.generation)
             {
                 state.menu = None;
             }
@@ -34,10 +35,12 @@ impl StatusItem for Fake {
     fn install(&self) -> Result<StatusItemHandle> {
         let mut state = self.state.lock();
         let (sender, actions) = event::channel();
+        let (quit_sender, quit_requests) = event::channel();
         let generation = state.next_generation();
-        state.menu = Some((generation, sender));
+        state.menu = Some((generation, sender, quit_sender));
         Ok(StatusItemHandle {
             actions,
+            quit_requests,
             registration: Registration::new(Uninstall {
                 state: Arc::downgrade(&self.state),
                 generation,

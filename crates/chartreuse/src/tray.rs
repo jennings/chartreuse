@@ -7,13 +7,18 @@
 //! start a capture (`capture::Message::Start`), the open items open an image
 //! (`import::Message::FromClipboard` and `FromFile`), Settings opens the
 //! settings window (`settings::Message::Open`), and Quit quits.
+//!
+//! Quitting the app another way while the status item is installed (on macOS:
+//! Cmd+Q, the app menu's or the Dock menu's Quit) is refused by the platform
+//! and arrives as [`Message::QuitRequested`], which closes the editor windows
+//! (`editor::Message::CloseAll`) and leaves the app in the menu bar.
 
 use chartreuse_platform::{MenuAction, StatusItemHandle};
 use iced::{Subscription, Task};
 
 use crate::alert::{self, Notice};
 use crate::app::{App, Message as AppMessage};
-use crate::{capture, events, import, settings};
+use crate::{capture, editor, events, import, settings};
 
 /// This feature's part of the app state ([`App::tray`]).
 #[derive(Debug, Default)]
@@ -29,6 +34,9 @@ pub enum Message {
     Install,
     /// The user chose an item from the status item menu.
     Menu(MenuAction),
+    /// The user asked to quit outside the status item menu, and the platform
+    /// refused so the app stays in the menu bar.
+    QuitRequested,
 }
 
 pub fn boot(_app: &mut App) -> Task<AppMessage> {
@@ -39,13 +47,21 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
     match message {
         Message::Install => install(app),
         Message::Menu(action) => menu_action(action),
+        Message::QuitRequested => {
+            tracing::info!("closing the editors instead of quitting");
+            Task::done(AppMessage::Editor(editor::Message::CloseAll))
+        }
     }
 }
 
 pub fn subscription(app: &App) -> Subscription<AppMessage> {
     match &app.tray.handle {
-        Some(handle) => events::subscription(&handle.actions)
-            .map(|action| AppMessage::Tray(Message::Menu(action))),
+        Some(handle) => Subscription::batch([
+            events::subscription(&handle.actions)
+                .map(|action| AppMessage::Tray(Message::Menu(action))),
+            events::subscription(&handle.quit_requests)
+                .map(|()| AppMessage::Tray(Message::QuitRequested)),
+        ]),
         None => Subscription::none(),
     }
 }
@@ -105,20 +121,22 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// The first message [`subscription`] delivers.
+    fn delivered(app: &App) -> Message {
+        let streams = into_recipes(subscription(app))
+            .into_iter()
+            .map(|recipe| recipe.stream(futures::stream::empty().boxed()));
+        match block_on(futures::stream::select_all(streams).next()) {
+            Some(AppMessage::Tray(message)) => message,
+            other => panic!("expected a tray message, got {other:?}"),
+        }
+    }
+
     /// Chooses `action` in the status item menu and returns the message it
     /// arrives as through [`subscription`].
     fn choose(app: &App, fake: &chartreuse_platform::fake::Fake, action: MenuAction) -> Message {
         assert!(fake.choose_menu_action(action));
-        let mut recipes = into_recipes(subscription(app));
-        assert_eq!(recipes.len(), 1);
-        let events = recipes
-            .pop()
-            .unwrap()
-            .stream(futures::stream::empty().boxed());
-        match block_on(events.into_future()).0 {
-            Some(AppMessage::Tray(message)) => message,
-            other => panic!("expected a tray message, got {other:?}"),
-        }
+        delivered(app)
     }
 
     #[test]
@@ -142,6 +160,16 @@ mod tests {
 
         let action = MenuAction::Capture(CaptureMode::Selection);
         assert!(matches!(choose(&app, &fake, action), Message::Menu(chosen) if chosen == action));
+    }
+
+    #[test]
+    fn refused_quits_arrive_as_messages_once_installed() {
+        let (mut app, fake) = App::for_test();
+        assert!(!fake.request_quit());
+        let _ = app.update(AppMessage::Tray(Message::Install));
+
+        assert!(fake.request_quit());
+        assert!(matches!(delivered(&app), Message::QuitRequested));
     }
 
     #[test]

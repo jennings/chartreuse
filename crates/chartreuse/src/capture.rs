@@ -632,13 +632,10 @@ mod tests {
 
     /// The first message `subscription` delivers.
     fn next_message(subscription: Subscription<AppMessage>) -> AppMessage {
-        let mut recipes = into_recipes(subscription);
-        assert_eq!(recipes.len(), 1);
-        let events = recipes
-            .pop()
-            .unwrap()
-            .stream(futures::stream::empty().boxed());
-        block_on(events.into_future()).0.expect("a message")
+        let streams = into_recipes(subscription)
+            .into_iter()
+            .map(|recipe| recipe.stream(futures::stream::empty().boxed()));
+        block_on(futures::stream::select_all(streams).next()).expect("a message")
     }
 
     #[test]
