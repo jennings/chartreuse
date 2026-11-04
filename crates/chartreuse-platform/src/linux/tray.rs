@@ -62,6 +62,8 @@ pub fn install() -> Result<StatusItemHandle> {
         .map_err(|error| Error::Platform(describe(&error)))?;
     Ok(StatusItemHandle {
         actions: receiver,
+        // Quitting is never refused here, so there are no requests.
+        quit_requests: event::channel().1,
         registration: Registration::new(Service(handle)),
     })
 }

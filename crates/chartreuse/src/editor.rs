@@ -48,6 +48,11 @@
 //! Cancel (or Escape) goes back to editing. A close-after button never asks:
 //! it closes the window only once its export succeeded.
 //!
+//! [`Message::CloseAll`] asks to close every editor window this way at once,
+//! and brings forward the windows that ask first. On macOS that is what
+//! quitting the app (Cmd+Q, the Dock menu's Quit) does, since the app keeps
+//! running in the menu bar (see `tray`).
+//!
 //! [`Document::export_size`]: chartreuse_editor::model::Document::export_size
 //! [`Document::revision`]: chartreuse_editor::model::Document::revision
 //! [`Settings::confirm_close_unsaved`]: chartreuse_config::Settings::confirm_close_unsaved
@@ -153,6 +158,8 @@ pub enum Message {
     /// The user asked to close an editor window (Cmd+W, the close button, or
     /// the desktop's shortcut); see [Closing](self#closing).
     CloseRequested(window::Id),
+    /// Ask to close every editor window, as [`Message::CloseRequested`] each.
+    CloseAll,
     /// The dialog's Close button: close the window without saving.
     ConfirmClose(window::Id),
     /// The dialog's Cancel button: keep the window open.
@@ -226,6 +233,7 @@ pub fn update(app: &mut App, message: Message) -> Task<AppMessage> {
             Task::none()
         }
         Message::CloseRequested(window) => request_close(app, window),
+        Message::CloseAll => close_all(app),
         Message::ConfirmClose(window) => window::close(window),
         Message::CancelClose(window) => {
             if let Some(session) = app.editor.windows.get_mut(&window) {
@@ -276,6 +284,20 @@ fn request_close(app: &mut App, window: window::Id) -> Task<AppMessage> {
     } else {
         window::close(window)
     }
+}
+
+/// Asks to close every editor window ([`request_close`]), and focuses those
+/// that ask first, so the question is in front of the user.
+fn close_all(app: &mut App) -> Task<AppMessage> {
+    let windows: Vec<window::Id> = app.editor.windows.keys().copied().collect();
+    Task::batch(windows.into_iter().map(|window| {
+        let close = request_close(app, window);
+        if app.editor.windows[&window].confirming {
+            close.chain(window::gain_focus(window))
+        } else {
+            close
+        }
+    }))
 }
 
 /// Asks to close editor windows as the user does ([`Message::CloseRequested`]).
@@ -933,6 +955,18 @@ mod tests {
         export(&mut app, window, Target::Save, false);
         request_close(&mut app, window);
         assert!(confirming(&app, window), "the save was cancelled");
+    }
+
+    #[test]
+    fn quitting_closes_the_saved_editors_and_asks_about_the_others() {
+        let (mut app, _fake, _saves, unsaved) = app_with_editor();
+        draw_rectangle(&mut app, unsaved);
+        let copied = open_editor(&mut app, white());
+        export(&mut app, copied, Target::Copy, false);
+
+        let _ = app.settle(AppMessage::Tray(crate::tray::Message::QuitRequested));
+        assert_eq!(editors(&app), [unsaved], "the copied image closed");
+        assert!(confirming(&app, unsaved));
     }
 
     #[test]

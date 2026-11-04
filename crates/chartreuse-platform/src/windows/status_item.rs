@@ -77,6 +77,8 @@ impl StatusItem for WindowsStatusItem {
         tracing::info!("tray icon installed");
         Ok(StatusItemHandle {
             actions,
+            // Quitting is never refused here, so there are no requests.
+            quit_requests: event::channel().1,
             registration: Registration::new(installed),
         })
     }

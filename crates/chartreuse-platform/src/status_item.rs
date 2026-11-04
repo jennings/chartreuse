@@ -55,6 +55,12 @@ pub const MENU: &[MenuEntry] = &[
 pub struct StatusItemHandle {
     /// Menu choices, as the user makes them.
     pub actions: EventReceiver<MenuAction>,
+    /// Requests to quit made outside the status item menu, which the backend
+    /// refused so the app can close its windows instead: on macOS, Cmd+Q and
+    /// the Quit items of the app menu and the Dock, while the status item is
+    /// installed (logging out, restarting, and shutting down still quit). The
+    /// other backends never refuse a quit, so this yields nothing there.
+    pub quit_requests: EventReceiver<()>,
     /// Keeps the icon installed; drop it (on the main thread) to remove it.
     pub registration: Registration,
 }
@@ -63,7 +69,8 @@ pub struct StatusItemHandle {
 /// the [`MENU`].
 pub trait StatusItem {
     /// Shows the icon and menu. On macOS this also switches the app to the
-    /// accessory activation policy (no Dock icon).
+    /// accessory activation policy (no Dock icon) and starts refusing quits
+    /// in favor of [`StatusItemHandle::quit_requests`].
     ///
     /// **Main thread only** (`NSStatusItem`). Call it from iced `update`, not
     /// `boot`: `boot` runs before the AppKit run loop starts, and a status item

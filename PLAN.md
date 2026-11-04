@@ -80,6 +80,10 @@ profile. An optimized local build is still a development build.
 - The program has no Dock / taskbar presence while only the status item is showing.
   On macOS, while an editor window is open, the app shows in the Dock and the app
   switcher (Cmd+Tab) so the user can switch back to it.
+- On macOS, quitting the app the usual ways (Cmd+Q, the app menu's or the Dock menu's
+  Quit) closes the editor windows instead, asking first about unsaved images, and
+  leaves Chartreuse in the menu bar; only the status item's Quit quits. Logging out,
+  restarting, and shutting down still quit.
 
 ### Global hotkeys
 

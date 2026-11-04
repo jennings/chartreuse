@@ -1089,16 +1089,10 @@ mod tests {
         let (mut app, fake) = App::for_test();
         let _ = app.settle(AppMessage::Tray(tray::Message::Install));
         assert!(fake.choose_menu_action(MenuAction::Settings));
-        let mut recipes = into_recipes(tray::subscription(&app));
-        let chosen = block_on(
-            recipes
-                .pop()
-                .unwrap()
-                .stream(futures::stream::empty().boxed())
-                .into_future(),
-        )
-        .0
-        .unwrap();
+        let streams = into_recipes(tray::subscription(&app))
+            .into_iter()
+            .map(|recipe| recipe.stream(futures::stream::empty().boxed()));
+        let chosen = block_on(futures::stream::select_all(streams).next()).unwrap();
         let _ = app.settle(chosen);
         let opened = settings_windows(&app);
         assert_eq!(opened.len(), 1);

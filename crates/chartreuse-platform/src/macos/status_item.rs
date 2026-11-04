@@ -5,7 +5,11 @@
 //! whose action method looks the chosen [`MenuAction`] up by the item's tag (its
 //! position in [`MENU`]) and sends it through the [`EventSender`]. The returned
 //! [`Registration`] owns the status item and the target (menu items do not retain
-//! their target); dropping it removes the item from the menu bar.
+//! their target); dropping it removes the item from the menu bar. While it is
+//! installed, the app refuses to quit other ways ([`quit`]) and hands those
+//! requests to the app as [`StatusItemHandle::quit_requests`].
+
+mod quit;
 
 use chartreuse_core::{flavor, Error, Result};
 use objc2::rc::Retained;
@@ -21,6 +25,7 @@ use objc2_foundation::{
     ns_string, NSData, NSInteger, NSObject, NSObjectProtocol, NSSize, NSString,
 };
 
+use self::quit::QuitRequests;
 use crate::event::{self, EventSender, Registration};
 use crate::status_item::{MenuAction, MenuEntry, StatusItem, StatusItemHandle, MENU};
 
@@ -41,12 +46,14 @@ impl StatusItem for MacosStatusItem {
         })?;
         let icon = icon()?;
         let (sender, actions) = event::channel();
+        let (quit_sender, quit_requests) = event::channel();
         let target = MenuTarget::new(mtm, sender);
         let menu = menu(mtm, &target);
 
         let installed = Installed {
             item: NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength),
             _target: target,
+            _quits: QuitRequests::route(mtm, quit_sender),
         };
         // Dropping `installed` on an early return removes the item again.
         let button = installed
@@ -61,6 +68,7 @@ impl StatusItem for MacosStatusItem {
         tracing::info!("status item installed");
         Ok(StatusItemHandle {
             actions,
+            quit_requests,
             registration: Registration::new(installed),
         })
     }
@@ -85,6 +93,7 @@ struct Installed {
     // without retaining it.
     item: Retained<NSStatusItem>,
     _target: Retained<MenuTarget>,
+    _quits: QuitRequests,
 }
 
 impl Drop for Installed {
