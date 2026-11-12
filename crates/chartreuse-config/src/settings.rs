@@ -13,8 +13,8 @@
 //! confirm_close_unsaved = true
 //!
 //! [hotkeys]
-//! display = "Ctrl+Alt+Shift+3"    # "PrintScreen" on Windows
-//! selection = "Ctrl+Alt+Shift+4"  # "Ctrl+PrintScreen" on Windows
+//! display = "Ctrl+Alt+Shift+3"    # "Ctrl+PrintScreen" on Windows
+//! selection = "Ctrl+Alt+Shift+4"  # "PrintScreen" on Windows
 //! ```
 //!
 //! Hotkeys use [`Hotkey`]'s text form (canonical `Ctrl+Alt+Shift+Super+Key`,
@@ -211,8 +211,9 @@ impl From<RelativeSaveDirectory> for chartreuse_core::Error {
 ///
 /// The defaults are Ctrl+Alt+Shift+3 (display) and +4 (selection), echoing the
 /// macOS screenshot shortcuts (Shift+Command+3/4) without clashing with them.
-/// On Windows they are PrintScreen (display) and Ctrl+PrintScreen (selection),
-/// the key Windows users reach for.
+/// On Windows they are Ctrl+PrintScreen (display) and PrintScreen (selection):
+/// the key Windows users reach for picks a part of the screen, as Windows'
+/// own Snipping Tool does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "HotkeysText", into = "HotkeysText")]
 pub struct Hotkeys {
@@ -292,8 +293,8 @@ impl Default for Hotkeys {
     fn default() -> Self {
         if cfg!(windows) {
             Self {
-                display: Hotkey::new(Modifiers::NONE, Key::PrintScreen),
-                selection: Hotkey::new(Modifiers::CONTROL, Key::PrintScreen),
+                display: Hotkey::new(Modifiers::CONTROL, Key::PrintScreen),
+                selection: Hotkey::new(Modifiers::NONE, Key::PrintScreen),
             }
         } else {
             let hotkey =
@@ -399,7 +400,7 @@ mod tests {
     fn defaults_match_the_documented_values() {
         let settings = Settings::default();
         let (display, selection) = if cfg!(windows) {
-            ("PrintScreen", "Ctrl+PrintScreen")
+            ("Ctrl+PrintScreen", "PrintScreen")
         } else {
             ("Ctrl+Alt+Shift+3", "Ctrl+Alt+Shift+4")
         };
