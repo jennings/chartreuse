@@ -11,7 +11,7 @@
 //! capture mode ([`bindings`]). By default they are Ctrl+Alt+Shift+3 (display)
 //! and +4 (selection), echoing the macOS screenshot shortcuts
 //! (Shift+Command+3/4) without clashing with them, since macOS keeps those
-//! for itself; on Windows, PrintScreen and Ctrl+PrintScreen (see
+//! for itself; on Windows, Ctrl+PrintScreen and PrintScreen (see
 //! [`chartreuse_config::Hotkeys`]). Pressing one starts that capture
 //! (`capture::Message::Start`).
 //!
