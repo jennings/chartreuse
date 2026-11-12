@@ -518,12 +518,10 @@ pub fn subscription(app: &App) -> Subscription<AppMessage> {
     let recorder = if recording {
         event::listen_with(|event, _status, window| {
             let input = match event {
-                iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                    physical_key,
-                    modifiers,
-                    repeat: false,
-                    ..
-                }) => RecorderInput::Key(physical_key, modifiers),
+                iced::Event::Keyboard(event) => {
+                    let (key, modifiers) = recorder::heard(&event)?;
+                    RecorderInput::Key(key, modifiers)
+                }
                 iced::Event::Window(window::Event::Unfocused) => RecorderInput::Unfocused,
                 _ => return None,
             };

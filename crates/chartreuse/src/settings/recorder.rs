@@ -39,6 +39,28 @@ pub(super) const NEEDS_MODIFIER: &str = if cfg!(target_os = "macos") {
 /// The line under a hotkey that was pressed with a key hotkeys cannot use.
 pub(super) const UNSUPPORTED: &str = "That key cannot be part of a hotkey";
 
+/// The key and held modifiers of a keyboard event the recorder takes: a
+/// first press, or PrintScreen's release. Windows keeps PrintScreen's press
+/// for its own screenshot hotkey and only sends the release. Where the press
+/// does arrive, it has already ended recording (or been rejected, which the
+/// release repeats) by the time the release comes.
+pub(super) fn heard(event: &keyboard::Event) -> Option<(Physical, keyboard::Modifiers)> {
+    match *event {
+        keyboard::Event::KeyPressed {
+            physical_key,
+            modifiers,
+            repeat: false,
+            ..
+        } => Some((physical_key, modifiers)),
+        keyboard::Event::KeyReleased {
+            physical_key: physical_key @ Physical::Code(Code::PrintScreen),
+            modifiers,
+            ..
+        } => Some((physical_key, modifiers)),
+        _ => None,
+    }
+}
+
 /// What pressing `key` with `modifiers` held means to the recorder.
 pub(super) fn recorded(key: Physical, modifiers: keyboard::Modifiers) -> Recorded {
     let Physical::Code(code) = key else {
@@ -291,6 +313,58 @@ mod tests {
             recorded(Physical::Unidentified(NativeCode::Unidentified), CMD_SHIFT),
             Recorded::Unsupported
         );
+    }
+
+    fn key_event(
+        code: Code,
+        held: keyboard::Modifiers,
+        pressed: bool,
+        repeat: bool,
+    ) -> keyboard::Event {
+        let key = keyboard::Key::Unidentified;
+        let physical_key = Physical::Code(code);
+        let location = keyboard::Location::Standard;
+        if pressed {
+            keyboard::Event::KeyPressed {
+                modified_key: key.clone(),
+                key,
+                physical_key,
+                location,
+                modifiers: held,
+                text: None,
+                repeat,
+            }
+        } else {
+            keyboard::Event::KeyReleased {
+                modified_key: key.clone(),
+                key,
+                physical_key,
+                location,
+                modifiers: held,
+            }
+        }
+    }
+
+    #[test]
+    fn print_screen_is_heard_on_release_as_windows_sends_no_press() {
+        for held in [keyboard::Modifiers::empty(), keyboard::Modifiers::CTRL] {
+            assert_eq!(
+                heard(&key_event(Code::PrintScreen, held, false, false)),
+                Some((Physical::Code(Code::PrintScreen), held)),
+                "{held:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_keys_are_heard_on_their_first_press_only() {
+        let ctrl = keyboard::Modifiers::CTRL;
+        assert_eq!(
+            heard(&key_event(Code::KeyS, ctrl, true, false)),
+            Some((Physical::Code(Code::KeyS), ctrl))
+        );
+        assert_eq!(heard(&key_event(Code::KeyS, ctrl, true, true)), None);
+        assert_eq!(heard(&key_event(Code::KeyS, ctrl, false, false)), None);
     }
 
     #[test]
